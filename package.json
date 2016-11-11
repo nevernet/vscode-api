@@ -1,0 +1,36 @@
+{
+    "name": "api",
+    "displayName": "vscode-api-language",
+    "description": "vscode-api-language",
+    "version": "0.0.1",
+    "publisher": "Daniel",
+    "engines": {
+        "vscode": "^1.5.0"
+    },
+    "categories": [
+        "Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "api",
+                "aliases": [
+                    "api",
+                    "api"
+                ],
+                "extensions": [
+                    ".api",
+                    ".keydef"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "api",
+                "scopeName": "text.api",
+                "path": "./syntaxes/api.tmLanguage"
+            }
+        ]
+    }
+}
