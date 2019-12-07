@@ -1,0 +1,119 @@
+# [PackageDev] target_format: plist, ext: tmLanguage
+---
+name: api
+scopeName: text.api
+fileTypes: [api]
+uuid: 247c046a-3e91-4ca8-b9b4-0a57619712fb
+
+patterns:
+- include: '#stats'
+
+repository:
+  stats:
+    name: stat.api
+    patterns:
+    - include: '#typedef'
+    - include: '#apidef'
+    - include: '#common'
+
+  common:
+    name: common.api
+    patterns:
+    - include: '#numeric'
+    - include: '#string'
+    - include: '#consts'
+    - include: '#buildin-comment'
+    - include: '#comment'
+    - include: '#type'
+    - include: '#buildin'
+
+  typedef:
+    name: typedef.api
+    begin: (?=\b(typedef)\b)
+    end: (?<=\})\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*$
+    endCaptures:
+      '1': { name: entity.name.class.api }
+    patterns:
+    - include: '#structdef'
+    - include: '#common'
+
+  structdef:
+    name: structdef.api
+    begin: (?=\b(struct)\b)
+    end: \}
+    patterns:
+    - include: '#self'
+    - include: '#common'
+
+  apidef:
+    name: apidef.api
+    begin: (?=\b(api)\b)
+    end: \}
+    patterns:
+    - include: '#uridef'
+    - include: '#structdef'
+    - include: '#common'
+
+  uridef:
+    name: uri.api
+    match: '"([a-zA-Z_][a-zA-Z_0-9]*/[a-zA-Z_][a-zA-Z_0-9]*)"'
+
+  type:
+    name: storage.type.api
+    match: \b(int|long|uint|ulong|bool|float|double|string)\b
+
+  buildin:
+    name: keyword.api
+    match: (\b(apilist|api|typedef|struct|enum|input|output|extract|extends|implements|patch)\b)|(#include\b|#set\b)
+
+  consts:
+    name: constant.language.api
+    match: \b(GET|SET)\b
+
+  literal:
+    name: literal.ts
+    patterns:
+    - include: '#numeric'
+    - include: '#string'
+
+  numeric:
+    name: constant.numeric.ts
+    match: \b(?<=[^$])((0(x|X)[0-9a-fA-F]+)|([0-9]+(\.[0-9]+)?))\b
+
+  string:
+    name: string.api
+    begin: '"'
+    end: '"|(?=$)'
+    patterns:
+    - include: '#string-character-escape'
+
+  string-character-escape:
+    name: constant.character.escape
+    match: \\(x\h{2}|[0-2][0-7]{,2}|3[0-6][0-7]?|37[0-7]?|[4-7][0-7]?|.|$)
+
+  buildin-comment:
+    name: string.api
+    patterns:
+    - include: '#buildin-comment-block'
+
+  buildin-comment-block:
+    name: constant.other.api
+    begin: \[\[
+    end: \]\]
+
+  comment:
+    name: comment.ts
+    patterns:
+    - include: '#comment-block'
+    - include: '#comment-line'
+
+  comment-block:
+    name: comment.block.ts
+    begin: /\*
+    end: \*/
+
+  comment-line:
+    name: comment.line.ts
+    match: (//).*$\n?
+
+...
