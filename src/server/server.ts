@@ -169,9 +169,21 @@ documents.onDidClose((e) => {
   documentSettings.delete(e.document.uri);
 });
 
-// 文档内容变更时验证
+// 文档内容变更时验证和索引
 documents.onDidChangeContent((change) => {
+  // 自动索引文档（异步，不阻塞）
+  setTimeout(() => {
+    indexDocument(change.document);
+  }, 100); // 延迟100ms，避免频繁的输入导致性能问题
+  
   validateTextDocument(change.document);
+});
+
+// 文档打开时索引
+documents.onDidOpen((event) => {
+  // 立即索引新打开的文档
+  indexDocument(event.document);
+  validateTextDocument(event.document);
 });
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
@@ -263,46 +275,73 @@ connection.onCompletion(
       return items;
     }
 
-    const text = document.getText();
-    const position = textDocumentPosition.position;
-    const lines = text.split("\n");
-    const currentLine = lines[position.line] || "";
-    const currentLineToPosition = currentLine.substring(0, position.character);
+    try {
+      // 确保文档已经被索引
+      indexDocument(document);
 
-    // 分析当前上下文
-    const context = analyzeCompletionContext(
-      currentLineToPosition,
-      lines,
-      position
-    );
+      const text = document.getText();
+      const position = textDocumentPosition.position;
+      const lines = text.split("\n");
+      const currentLine = lines[position.line] || "";
+      const currentLineToPosition = currentLine.substring(0, position.character);
 
-    // 根据上下文提供不同的补全建议
-    switch (context.type) {
-      case "struct-reference":
-        // 在需要结构体引用的地方（如 input, output）
-        addStructCompletions(items);
-        break;
-      case "field-definition":
-        // 在字段定义中
-        addTypeCompletions(items);
-        addStructCompletions(items);
-        break;
-      case "api-definition":
-        // 在API定义中
-        addApiBodyKeywords(items);
-        break;
-      case "global-scope":
-        // 在全局作用域
-        addGlobalKeywords(items);
-        break;
-      default:
-        // 默认补全
-        addAllCompletions(items);
+      // 分析当前上下文（使用优化后的版本）
+      const context = analyzeCompletionContext(
+        currentLineToPosition,
+        lines,
+        position
+      );
+
+      // 根据上下文提供不同的补全建议
+      switch (context.type) {
+        case "struct-reference":
+          // 在需要结构体引用的地方（如 input, output）
+          addStructCompletions(items);
+          break;
+        case "field-definition":
+          // 在字段定义中
+          addTypeCompletions(items);
+          addStructCompletions(items);
+          break;
+        case "api-definition":
+          // 在API定义中
+          addApiBodyKeywords(items);
+          break;
+        case "global-scope":
+          // 在全局作用域
+          addGlobalKeywords(items);
+          break;
+        default:
+          // 默认补全
+          addAllCompletions(items);
+      }
+
+      return items;
+    } catch (error) {
+      // 错误处理，避免崩溃
+      console.error("Completion error:", error);
+      return [];
     }
-
-    return items;
   }
 );
+
+// 文档索引功能
+function indexDocument(document: TextDocument) {
+  try {
+    const text = document.getText();
+    const lexer = new ApiLexer(text);
+    const parser = new ApiParser(lexer);
+    const ast = parser.parse(text);
+    
+    // 收集符号
+    const collector = new SymbolCollector(globalSymbolTable, document.uri);
+    collector.collect(ast);
+    
+  } catch (error) {
+    // 解析错误不影响自动完成功能
+    console.warn("Document indexing failed:", (error as Error).message);
+  }
+}
 
 // 分析补全上下文
 function analyzeCompletionContext(
@@ -317,41 +356,45 @@ function analyzeCompletionContext(
     return { type: "struct-reference" };
   }
 
-  // 检查是否在 API 定义内部
+  // 优化：只检查当前行附近的上下文，避免遍历整个文档
+  const startLine = Math.max(0, position.line - 20); // 只检查前20行
+  const endLine = Math.min(lines.length - 1, position.line + 5); // 只检查后5行
+  
   let braceLevel = 0;
   let inApiDefinition = false;
   let inApiListDefinition = false;
+  let inStructDefinition = false;
 
-  for (let i = 0; i <= position.line; i++) {
+  // 从起始行开始分析上下文
+  for (let i = startLine; i <= endLine; i++) {
     const lineText = lines[i];
+    
+    // 检查API定义开始
     if (lineText.includes("api ") && lineText.includes("{")) {
       inApiDefinition = true;
     }
     if (lineText.includes("apilist ") && lineText.includes("{")) {
       inApiListDefinition = true;
     }
+    if (lineText.includes("struct {")) {
+      inStructDefinition = true;
+    }
 
-    // 计算大括号层级
-    for (const char of lineText) {
-      if (char === "{") braceLevel++;
-      if (char === "}") braceLevel--;
+    // 计算大括号层级（只对当前行之前的行计算）
+    if (i <= position.line) {
+      for (const char of lineText) {
+        if (char === "{") braceLevel++;
+        if (char === "}") braceLevel--;
+      }
     }
   }
 
-  if (inApiDefinition && braceLevel > 0) {
+  // 简化的上下文判断
+  if ((inApiDefinition || inApiListDefinition) && braceLevel > 0) {
     return { type: "api-definition" };
   }
 
-  if (inApiListDefinition && braceLevel > 0) {
-    return { type: "api-definition" };
-  }
-
-  // 检查是否在结构体定义中
-  if (
-    line.includes("struct {") ||
-    (braceLevel > 0 &&
-      lines.slice(0, position.line).some((l) => l.includes("struct {")))
-  ) {
+  if (inStructDefinition && braceLevel > 0) {
     return { type: "field-definition" };
   }
 
@@ -658,26 +701,38 @@ connection.onDocumentFormatting(
       return [];
     }
 
-    // 获取文档设置
-    const settings = await getDocumentSettings(document.uri);
+    try {
+      // 获取文档设置
+      const settings = await getDocumentSettings(document.uri);
 
-    // 检查格式化是否启用
-    if (!settings.format.enable) {
+      // 检查格式化是否启用
+      if (!settings.format.enable) {
+        return [];
+      }
+
+      const text = document.getText();
+      
+      // 性能保护：限制文档大小
+      if (text.length > 100000) { // 100KB限制
+        console.warn("Document too large for formatting:", text.length);
+        return [];
+      }
+
+      const formattedText = formatApiDocument(text, settings.format);
+
+      return [
+        {
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: document.lineCount, character: 0 },
+          },
+          newText: formattedText,
+        },
+      ];
+    } catch (error) {
+      console.error("Formatting error:", error);
       return [];
     }
-
-    const text = document.getText();
-    const formattedText = formatApiDocument(text, settings.format);
-
-    return [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: document.lineCount, character: 0 },
-        },
-        newText: formattedText,
-      },
-    ];
   }
 );
 
