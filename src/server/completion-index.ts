@@ -297,6 +297,14 @@ export class CompletionIndex {
   }
 
   /**
+   * 清空索引（重置所有状态）
+   */
+  public clear(): void {
+    this.cachedCompletions.clear();
+    this.lastUpdateTime = 0;
+  }
+
+  /**
    * 强制刷新索引
    */
   public refresh(): void {

@@ -2,7 +2,7 @@
     "name": "api",
     "displayName": "vscode-api-language",
     "description": "vscode-api-language with Language Server support",
-    "version": "0.0.8",
+    "version": "0.0.23",
     "publisher": "Daniel",
     "repository": {
         "type": "git",
@@ -38,6 +38,43 @@
                 "language": "api",
                 "scopeName": "text.api",
                 "path": "./syntaxes/api.tmLanguage"
+            }
+        ],
+        "commands": [
+            {
+                "command": "api.reindexAll",
+                "title": "重新索引所有API文件",
+                "category": "API"
+            },
+            {
+                "command": "api.cancelIndexing",
+                "title": "取消索引",
+                "category": "API"
+            },
+            {
+                "command": "api.clearIndex",
+                "title": "清空索引",
+                "category": "API"
+            },
+            {
+                "command": "api.forceResetAndReindex",
+                "title": "强制重置并重新索引",
+                "category": "API"
+            },
+            {
+                "command": "api.getIndexStatus",
+                "title": "获取索引状态（调试）",
+                "category": "API"
+            },
+            {
+                "command": "api.emergencyStop",
+                "title": "紧急停止所有索引操作",
+                "category": "API"
+            },
+            {
+                "command": "api.absoluteRestart",
+                "title": "绝对重启索引系统",
+                "category": "API"
             }
         ],
         "configuration": {
