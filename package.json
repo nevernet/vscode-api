@@ -1,36 +1,98 @@
 {
-    "name": "api",
-    "displayName": "vscode-api-language",
-    "description": "vscode-api-language",
-    "version": "0.0.1",
-    "publisher": "Daniel",
-    "engines": {
-        "vscode": "^1.5.0"
-    },
-    "categories": [
-        "Languages"
-    ],
-    "contributes": {
-        "languages": [
-            {
-                "id": "api",
-                "aliases": [
-                    "api",
-                    "api"
-                ],
-                "extensions": [
-                    ".api",
-                    ".keydef"
-                ],
-                "configuration": "./language-configuration.json"
-            }
+  "name": "api",
+  "displayName": "vscode-api-language",
+  "description": "vscode-api-language with Language Server support",
+  "version": "0.0.4",
+  "publisher": "Daniel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nevernet/vscode-api.git"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:api"
+  ],
+  "main": "./dist/client/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "api",
+        "aliases": [
+          "API",
+          "api"
         ],
-        "grammars": [
-            {
-                "language": "api",
-                "scopeName": "text.api",
-                "path": "./syntaxes/api.tmLanguage"
-            }
-        ]
+        "extensions": [
+          ".api",
+          ".keydef"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "api",
+        "scopeName": "text.api",
+        "path": "./syntaxes/api.tmLanguage"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "API Language Server Configuration",
+      "properties": {
+        "apiLanguageServer.maxNumberOfProblems": {
+          "scope": "resource",
+          "type": "number",
+          "default": 100,
+          "description": "Controls the maximum number of problems produced by the server."
+        },
+        "apiLanguageServer.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        }
+      }
     }
+  },
+  "scripts": {
+    "compile": "npm run clean && tsc -b",
+    "watch": "tsc -b -w",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "lint:fix": "eslint src --ext ts --fix",
+    "test": "node ./dist/test/runTest.js",
+    "clean": "rm -rf dist",
+    "bump-version": "node scripts/bump-version.js",
+    "build": "node scripts/build.js",
+    "build:bump": "node scripts/build.js --bump",
+    "package": "npm run compile && npx vsce package --out dist/",
+    "package:bump": "npm run bump-version && npm run package",
+    "publish": "npm run package:bump && npx vsce publish",
+    "dev": "npm run watch"
+  },
+  "devDependencies": {
+    "@types/node": "16.x",
+    "@types/vscode": "^1.74.0",
+    "@typescript-eslint/eslint-plugin": "^5.62.0",
+    "@typescript-eslint/parser": "^5.62.0",
+    "@vscode/test-electron": "^2.2.0",
+    "@vscode/vsce": "^2.19.0",
+    "eslint": "^8.28.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0",
+    "vscode-languageserver": "^8.1.0",
+    "vscode-languageserver-textdocument": "^1.0.8"
+  }
 }

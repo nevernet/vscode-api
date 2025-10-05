@@ -1,0 +1,43 @@
+// API示例文件
+
+typedef struct {
+    int id;
+    string name;
+    float price;
+    bool available;
+} Product
+
+typedef struct {
+    int userId;
+    string username;
+    string email;
+} User
+
+typedef struct {
+    int orderId;
+    User customer;
+    double totalAmount;
+} Order
+
+api "product/list" {
+    input User
+    output Product
+    extract id, name, price
+}
+
+api "order/create" {
+    input Order
+    output Order
+}
+
+enum Status {
+    PENDING = 1,
+    CONFIRMED = 2,
+    SHIPPED = 3,
+    DELIVERED = 4
+}
+
+// 测试重复定义（这会触发错误）
+typedef struct {
+    string description;
+} Product

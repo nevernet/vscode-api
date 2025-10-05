@@ -1,0 +1,39 @@
+# Source files
+src/**
+tsconfig.json
+.eslintrc.js
+
+# Development files
+.vscode-test/**
+.vscode/settings.json
+.vscode/extensions.json
+
+# Node modules (only include what's needed)
+node_modules/@types/**
+node_modules/eslint/**
+node_modules/@typescript-eslint/**
+node_modules/typescript/**
+
+# Build artifacts
+dist/test/**
+*.tsbuildinfo
+
+# Development scripts
+scripts/build.js
+scripts/bump-version.js
+
+# Git
+.git/**
+.gitignore
+
+# Documentation for development
+vsc-extension-quickstart.md
+
+# Test files
+src/test-parser.ts
+out/test-parser.*
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+*.log
