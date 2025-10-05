@@ -658,9 +658,16 @@ function formatApiDocument(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
-    // 处理空行和注释
-    if (!line || line.startsWith("//")) {
+    // 处理空行
+    if (!line) {
       formattedLines.push(line);
+      continue;
+    }
+
+    // 处理注释 - 需要根据当前缩进级别来缩进注释
+    if (line.startsWith("//")) {
+      const commentIndent = " ".repeat(indentLevel * indentSize);
+      formattedLines.push(commentIndent + line);
       continue;
     }
 
