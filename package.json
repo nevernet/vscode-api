@@ -2,7 +2,7 @@
     "name": "api",
     "displayName": "vscode-api-language",
     "description": "vscode-api-language with Language Server support",
-    "version": "0.0.7",
+    "version": "0.0.8",
     "publisher": "Daniel",
     "repository": {
         "type": "git",
