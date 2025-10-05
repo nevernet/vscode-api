@@ -275,9 +275,10 @@ connection.onCompletion(
       }
 
       const text = document.getText();
-      
+
       // 严格的性能保护：对于任何较大文档，只返回最基本的补全
-      if (text.length > 5000) { // 5KB 严格限制
+      if (text.length > 5000) {
+        // 5KB 严格限制
         return [
           { label: "struct", kind: CompletionItemKind.Keyword },
           { label: "api", kind: CompletionItemKind.Keyword },
@@ -289,7 +290,7 @@ connection.onCompletion(
       const position = textDocumentPosition.position;
       const lines = text.split("\n");
       const currentLine = lines[position.line] || "";
-      
+
       // 非常简单的上下文检测 - 只检查当前行
       const line = currentLine.trim().toLowerCase();
       const items: CompletionItem[] = [];
@@ -298,7 +299,7 @@ connection.onCompletion(
         // 结构体定义
         addTypeCompletions(items);
       } else if (line.includes("api")) {
-        // API定义  
+        // API定义
         addApiBodyKeywords(items);
       } else if (line.includes("input") || line.includes("output")) {
         // 输入输出
@@ -310,7 +311,6 @@ connection.onCompletion(
 
       // 限制返回数量，防止过多选项
       return items.slice(0, 10);
-      
     } catch (error) {
       console.error("Completion error:", error);
       return [];
@@ -344,7 +344,7 @@ function analyzeCompletionContext(
   const line = currentLineToPosition.trim();
 
   // 最简单的上下文判断，避免复杂逻辑
-  
+
   // 检查是否在 input 或 output 语句中
   if (line.includes("input ") || line.includes("output ")) {
     return { type: "struct-reference" };
@@ -352,14 +352,18 @@ function analyzeCompletionContext(
 
   // 简化：只检查当前行和前几行，减少处理量
   const checkLines = Math.min(5, position.line + 1); // 最多检查5行
-  
+
   let inStructDefinition = false;
   let inApiDefinition = false;
 
   // 从当前行往前检查少量行数
-  for (let i = Math.max(0, position.line - checkLines); i <= position.line; i++) {
+  for (
+    let i = Math.max(0, position.line - checkLines);
+    i <= position.line;
+    i++
+  ) {
     const lineText = lines[i] || "";
-    
+
     // 简单的检查，避免复杂的大括号计算
     if (lineText.includes("struct {")) {
       inStructDefinition = true;
@@ -382,7 +386,7 @@ function analyzeCompletionContext(
   }
 
   return { type: "global-scope" };
-}// 添加结构体补全 - 简化版
+} // 添加结构体补全 - 简化版
 function addStructCompletions(items: CompletionItem[]) {
   // 暂时使用静态的常见结构体，避免复杂的符号表查询
   const commonStructs = ["User", "Response", "Request"];
@@ -438,7 +442,7 @@ function addAllCompletions(items: CompletionItem[]) {
     { label: "string", kind: CompletionItemKind.TypeParameter },
     { label: "bool", kind: CompletionItemKind.TypeParameter },
   ];
-  
+
   items.push(...basicItems);
 }
 
@@ -660,14 +664,27 @@ function formatApiDocument(
       continue;
     }
 
+    // 特殊处理：检查是否是结构体定义的结束行（如 "} StructName"）
+    const isStructEndWithName = line.match(/^\}\s+[a-zA-Z_][a-zA-Z0-9_]*$/);
+
     // 减少缩进的情况
-    if (line === "}") {
+    if (line === "}" || isStructEndWithName) {
       indentLevel = Math.max(0, indentLevel - 1);
       currentContext.pop();
     }
 
-    // 添加缩进
-    const indent = " ".repeat(indentLevel * indentSize);
+    // 计算缩进 - 但顶层声明（typedef, struct, api 等）不应该缩进
+    let indent = "";
+    const isTopLevelDeclaration =
+      line.startsWith("typedef") ||
+      line.startsWith("struct ") ||
+      line.startsWith("api ") ||
+      line.startsWith("apilist ") ||
+      line.startsWith("enum ");
+
+    if (!isTopLevelDeclaration && !isStructEndWithName) {
+      indent = " ".repeat(indentLevel * indentSize);
+    }
 
     // 特殊处理字段定义 - 进行对齐
     if (

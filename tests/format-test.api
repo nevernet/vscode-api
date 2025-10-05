@@ -1,4 +1,15 @@
-// 测试格式化功能
+// 测试格式化功能 - 修复缩进问题
+typedef struct {
+  id           int
+  name         string
+  } CustomerCategoryParentInfo
+
+  typedef struct {
+    user_id      int
+    category     string
+    active       bool
+  } UserCategory
+
 typedef struct user {
 id int
 name string

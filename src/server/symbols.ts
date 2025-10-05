@@ -51,43 +51,14 @@ export class SymbolTable {
   public addSymbol(symbol: Symbol): void {
     const key = symbol.parent ? `${symbol.parent}.${symbol.name}` : symbol.name;
 
-    // 检查重复定义
+    // 重复定义检查仅针对 struct 字段和 enum 字段
     if (this.symbols.has(key)) {
       const existing = this.symbols.get(key)!;
-      // 检查结构体重复定义（全局）
-      if (symbol.kind === SymbolKind.Struct) {
-        if (!this.duplicates.has(key)) {
-          this.duplicates.set(key, [existing]);
-        }
-        this.duplicates.get(key)!.push(symbol);
-      }
-      // 检查枚举重复定义（全局）
-      else if (symbol.kind === SymbolKind.Enum) {
-        if (!this.duplicates.has(key)) {
-          this.duplicates.set(key, [existing]);
-        }
-        this.duplicates.get(key)!.push(symbol);
-      }
-      // 检查API重复定义（在同一个ApiList中）
-      else if (symbol.kind === SymbolKind.Api) {
-        if (existing.parent === symbol.parent) {
-          if (!this.duplicates.has(key)) {
-            this.duplicates.set(key, [existing]);
-          }
-          this.duplicates.get(key)!.push(symbol);
-        }
-      }
-      // 检查ApiList重复定义（全局）
-      else if (symbol.kind === SymbolKind.ApiList) {
-        if (!this.duplicates.has(key)) {
-          this.duplicates.set(key, [existing]);
-        }
-        this.duplicates.get(key)!.push(symbol);
-      }
-      // 检查字段重复定义（在同一个结构体或枚举中）
-      else if (
-        symbol.kind === SymbolKind.Field ||
-        symbol.kind === SymbolKind.EnumValue
+
+      // 只检查同一个结构体内的字段重复定义
+      if (
+        symbol.kind === SymbolKind.Field &&
+        existing.kind === SymbolKind.Field
       ) {
         if (existing.parent === symbol.parent) {
           if (!this.duplicates.has(key)) {
@@ -96,27 +67,29 @@ export class SymbolTable {
           this.duplicates.get(key)!.push(symbol);
         }
       }
+      // 只检查同一个枚举内的枚举值重复定义
+      else if (
+        symbol.kind === SymbolKind.EnumValue &&
+        existing.kind === SymbolKind.EnumValue
+      ) {
+        if (existing.parent === symbol.parent) {
+          if (!this.duplicates.has(key)) {
+            this.duplicates.set(key, [existing]);
+          }
+          this.duplicates.get(key)!.push(symbol);
+        }
+      }
+      // 不检查其他类型的重复定义（struct, enum, api, apilist 等）
     }
 
     this.symbols.set(key, symbol);
 
-    // 如果是字段，也添加到结构体字段映射中
+    // 如果是字段，也添加到结构体字段映射中（用于快速查找）
     if (symbol.kind === SymbolKind.Field && symbol.parent) {
       if (!this.structFields.has(symbol.parent)) {
         this.structFields.set(symbol.parent, new Map());
       }
-
-      // 检查在同一个结构体中的字段重复
       const structFields = this.structFields.get(symbol.parent)!;
-      if (structFields.has(symbol.name)) {
-        const duplicateKey = `${symbol.parent}.${symbol.name}`;
-        const existing = structFields.get(symbol.name)!;
-        if (!this.duplicates.has(duplicateKey)) {
-          this.duplicates.set(duplicateKey, [existing]);
-        }
-        this.duplicates.get(duplicateKey)!.push(symbol);
-      }
-
       structFields.set(symbol.name, symbol);
     }
   }
