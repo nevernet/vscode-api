@@ -17,7 +17,7 @@ typedef struct {
   id           int
   name         string
   description  string
-  name         int    // 这里应该报错：同一结构体内重复字段
+  name         int // 这里应该报错：同一结构体内重复字段
 } TestStruct
 
 typedef enum {

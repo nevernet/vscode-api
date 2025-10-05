@@ -1,71 +1,67 @@
 // 综合测试 - 所有功能验证
 typedef struct user {
-id int
-name string
-email string
-id int // 重复字段测试
+  id           int
+  name         string
+  email        string
+  id           int // 重复字段测试
 }
 
 typedef enum status {
-active
-inactive
-pending
-active // 重复枚举值测试
+  active
+  inactive
+  pending
+  active // 重复枚举值测试
 }
 
 // typedef enum 语法测试
 typedef enum {
-new = 1
-old = 2
+  new = 1
+  old = 2
 }
 
-// 内联结构测试  
+// 内联结构测试
 typedef struct {
-id int name string
+  id           int name string
 } inline_user
 
 // API列表测试
 apilist "cardconfig" {
-input struct {
-search string
-limit int
-offset int
-}
-output struct {
-cards []card
-total int
-}
-data struct {
-cache_key string
-expire_time int
-}
+  input struct {
+    search string
+    limit int
+    offset int
+  }
+  output struct {
+    cards []card
+    total int
+  }
 }
 
 // 嵌套内联结构
 typedef struct complex {
-user struct {
-profile struct {
-name string
-age int
-}
-settings struct {
-theme string
-lang string
-}
-}
-meta struct {
-created_at string
-updated_at string
-}
+  user struct {
+    profile struct {
+      name string
+      age int
+    }
+    settings struct {
+      theme string
+      lang string
+    }
+  }
+  meta struct {
+    created_at string
+    updated_at string
+  }
 }
 
 // 更多API测试
 apilist "userauth" {
-input struct {
-token string
-}
-output struct {
-user user
-permissions []string
-}
+  input struct {
+    token string
+  }
+  output struct {
+    user user
+    permissions []string
+  }
 }
