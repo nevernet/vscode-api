@@ -147,7 +147,16 @@ export class ApiLexer {
     this.advance(); // 跳过开始的引号
 
     let value = "";
+    let iterations = 0;
+    const MAX_ITERATIONS = 100000; // 防止无限循环
+
     while (this.position < this.text.length && this.currentChar() !== '"') {
+      if (++iterations > MAX_ITERATIONS) {
+        throw new Error(
+          `字符串读取超过最大迭代次数，可能存在未闭合的字符串 (line ${startLine})`
+        );
+      }
+
       if (this.currentChar() === "\\") {
         this.advance();
         if (this.position < this.text.length) {
@@ -290,7 +299,16 @@ export class ApiLexer {
     this.advance(); // /
     this.advance(); // *
 
+    let iterations = 0;
+    const MAX_ITERATIONS = 100000; // 防止无限循环
+
     while (this.position < this.text.length) {
+      if (++iterations > MAX_ITERATIONS) {
+        throw new Error(
+          `块注释读取超过最大迭代次数，可能存在未闭合的注释 (line ${startLine})`
+        );
+      }
+
       if (this.currentChar() === "*" && this.peekChar() === "/") {
         this.advance(); // *
         this.advance(); // /
@@ -319,7 +337,16 @@ export class ApiLexer {
     this.advance(); // [
     this.advance(); // [
 
+    let iterations = 0;
+    const MAX_ITERATIONS = 100000; // 防止无限循环
+
     while (this.position < this.text.length) {
+      if (++iterations > MAX_ITERATIONS) {
+        throw new Error(
+          `内置注释读取超过最大迭代次数，可能存在未闭合的注释 (line ${startLine})`
+        );
+      }
+
       if (this.currentChar() === "]" && this.peekChar() === "]") {
         this.advance(); // ]
         this.advance(); // ]
@@ -487,8 +514,16 @@ export class ApiLexer {
   public tokenize(): Token[] {
     const tokens: Token[] = [];
     let token: Token;
+    let iterations = 0;
+    const MAX_TOKENS = 500000; // 限制token数量，防止无限循环
 
     do {
+      if (++iterations > MAX_TOKENS) {
+        throw new Error(
+          `词法分析超过最大token数量(${MAX_TOKENS})，文件可能存在问题`
+        );
+      }
+
       token = this.nextToken();
       tokens.push(token);
     } while (token.type !== TokenType.EOF);

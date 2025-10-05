@@ -50,56 +50,80 @@ console.log(
 async function enforceProcessUniqueness() {
   try {
     const { exec } = require("child_process");
-    const result = await new Promise<string>((resolve, reject) => {
-      exec(
-        'ps aux | grep "vscode-api-language"',
-        (error: any, stdout: string) => {
-          if (error) reject(error);
-          else resolve(stdout);
-        }
-      );
-    });
 
-    const lines = result
-      .split("\n")
-      .filter(
-        (line) =>
-          line.includes("vscode-api-language") &&
-          !line.includes("grep") &&
-          !line.includes(`${PROCESS_PID}`)
-      );
+    // 使用更精确的进程查找命令
+    const searchPatterns = [
+      'ps aux | grep "dist/server/server.js"',
+      'ps aux | grep "api.*language.*server"',
+    ];
 
-    if (lines.length > 0) {
-      console.log(
-        `[PROCESS] 发现 ${lines.length} 个其他API语言服务器进程，正在清理...`
-      );
+    for (const pattern of searchPatterns) {
+      try {
+        const result = await new Promise<string>((resolve, reject) => {
+          exec(pattern, { timeout: 5000 }, (error: any, stdout: string) => {
+            if (error && error.code !== 1) {
+              // code 1 means no matches, which is ok
+              reject(error);
+            } else {
+              resolve(stdout || "");
+            }
+          });
+        });
 
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length > 1) {
-          const pid = parseInt(parts[1]);
-          if (pid && pid !== PROCESS_PID) {
-            console.log(`[PROCESS] 杀死进程 PID: ${pid}`);
-            try {
-              process.kill(pid, "SIGTERM");
-              // 如果SIGTERM失败，使用SIGKILL
-              setTimeout(() => {
+        const lines = result
+          .split("\n")
+          .filter(
+            (line) =>
+              line.length > 0 &&
+              !line.includes("grep") &&
+              !line.includes(`${PROCESS_PID}`) &&
+              (line.includes("server.js") ||
+                line.includes("api") ||
+                line.includes("language"))
+          );
+
+        if (lines.length > 0) {
+          console.log(
+            `[PROCESS] 发现 ${lines.length} 个可能的其他API语言服务器进程`
+          );
+
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length > 1) {
+              const pid = parseInt(parts[1]);
+              if (pid && pid !== PROCESS_PID && !isNaN(pid)) {
+                console.log(`[PROCESS] 尝试杀死旧进程 PID: ${pid}`);
                 try {
-                  process.kill(pid, "SIGKILL");
+                  // 先尝试SIGTERM，给进程机会优雅退出
+                  process.kill(pid, "SIGTERM");
+
+                  // 500毫秒后使用SIGKILL强制杀死
+                  setTimeout(() => {
+                    try {
+                      process.kill(pid, 0); // 检查进程是否还存在
+                      console.log(
+                        `[PROCESS] 进程 ${pid} 未响应SIGTERM，使用SIGKILL`
+                      );
+                      process.kill(pid, "SIGKILL");
+                    } catch (e) {
+                      // 进程已经退出，这是期望的结果
+                    }
+                  }, 500);
                 } catch (e) {
-                  // 进程可能已经退出
+                  console.log(`[PROCESS] 进程 ${pid} 可能已经退出`);
                 }
-              }, 1000);
-            } catch (e) {
-              console.log(`[PROCESS] 无法杀死进程 ${pid}:`, e);
+              }
             }
           }
+        } else {
+          console.log(
+            `[PROCESS] 未发现其他API语言服务器进程，当前PID: ${PROCESS_PID}`
+          );
         }
+      } catch (error) {
+        // 继续下一个搜索模式
+        console.log(`[PROCESS] 搜索模式 "${pattern}" 失败:`, error);
       }
-    } else {
-      console.log(
-        `[PROCESS] 确认进程唯一性 - 只有当前进程 ${PROCESS_PID} 在运行`
-      );
     }
   } catch (error) {
     console.log(`[PROCESS] 进程唯一性检查失败:`, error);
@@ -272,30 +296,59 @@ connection.onInitialize((params: InitializeParams) => {
 });
 
 connection.onInitialized(() => {
-  if (hasConfigurationCapability) {
-    // 注册配置变更
-    connection.client.register(
-      DidChangeConfigurationNotification.type,
-      undefined
-    );
-  }
-  if (hasWorkspaceFolderCapability) {
-    connection.workspace.onDidChangeWorkspaceFolders((_event) => {
-      connection.console.log("Workspace folder change event received.");
-      // 工作区变更时重新索引所有文档
-      createManagedTimeout(() => {
-        indexAllDocuments();
-      }, 1000); // 延迟1秒，确保文档已加载
-    });
-  }
+  try {
+    console.log(`[INIT] 索引系统状态: ${INDEXING_ENABLED ? "启用" : "禁用"}`);
 
-  // 初始化时先尝试加载缓存，如果失败再索引所有已打开的文档
-  createManagedTimeout(async () => {
-    const cacheLoaded = await loadCacheFromFile();
-    if (!cacheLoaded) {
-      indexAllDocuments();
+    if (hasConfigurationCapability) {
+      // 注册配置变更
+      connection.client.register(
+        DidChangeConfigurationNotification.type,
+        undefined
+      );
     }
-  }, 2000); // 延迟2秒，确保所有文档都已加载
+    if (hasWorkspaceFolderCapability) {
+      connection.workspace.onDidChangeWorkspaceFolders((_event) => {
+        connection.console.log("Workspace folder change event received.");
+        // 工作区变更时重新索引所有文档
+        if (INDEXING_ENABLED) {
+          try {
+            createManagedTimeout(() => {
+              indexAllDocuments();
+            }, 1000); // 延迟1秒，确保文档已加载
+          } catch (error) {
+            console.error("[INIT] 工作区变更处理失败:", error);
+          }
+        } else {
+          console.log("[INIT] 索引系统已禁用，跳过工作区索引");
+        }
+      });
+    }
+
+    // 初始化时先尝试加载缓存，如果失败再索引所有已打开的文档
+    if (INDEXING_ENABLED) {
+      createManagedTimeout(async () => {
+        try {
+          const cacheLoaded = await loadCacheFromFile();
+          if (!cacheLoaded) {
+            indexAllDocuments();
+          }
+        } catch (error) {
+          console.error("[INIT] 缓存加载失败:", error);
+          // 即使缓存加载失败，也尝试索引
+          try {
+            indexAllDocuments();
+          } catch (indexError) {
+            console.error("[INIT] 索引失败:", indexError);
+          }
+        }
+      }, 2000); // 延迟2秒，确保所有文档都已加载
+    } else {
+      console.log("[INIT] 索引系统已禁用，跳过初始索引");
+      notifyIndexingStatus("idle", "索引系统已禁用");
+    }
+  } catch (error) {
+    console.error("[INIT] 初始化失败:", error);
+  }
 });
 
 // 配置变更处理
@@ -313,9 +366,13 @@ connection.onDidChangeConfiguration((change) => {
   documents.all().forEach(validateTextDocument);
 
   // 重新索引所有文档，确保符号表是最新的
-  createManagedTimeout(() => {
-    indexAllDocuments();
-  }, 500);
+  if (INDEXING_ENABLED) {
+    createManagedTimeout(() => {
+      indexAllDocuments();
+    }, 500);
+  } else {
+    console.log("[CONFIG] 索引系统已禁用，跳过配置变更后的索引");
+  }
 });
 
 function getDocumentSettings(
@@ -427,103 +484,157 @@ documents.onDidSave?.((event) => {
   savingDocuments.delete(event.document.uri);
 
   // 保存完成后重新索引
-  createManagedTimeout(() => {
-    indexDocument(event.document);
-  }, 50);
+  if (INDEXING_ENABLED) {
+    createManagedTimeout(() => {
+      indexDocument(event.document);
+    }, 50);
+  } else {
+    console.log(`[DOC_SAVE] 索引系统已禁用，跳过索引`);
+  }
 });
 
 // 文档打开时索引
 documents.onDidOpen((event) => {
   // 立即索引新打开的文档
-  indexDocument(event.document);
+  if (INDEXING_ENABLED) {
+    indexDocument(event.document);
+  } else {
+    console.log(`[DOC_OPEN] 索引系统已禁用，跳过索引: ${event.document.uri}`);
+  }
+  // 始终进行语法检查
   validateTextDocument(event.document);
 });
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-  const settings = await getDocumentSettings(textDocument.uri);
-  const text = textDocument.getText();
-
-  const diagnostics: Diagnostic[] = [];
-
   try {
-    // 解析文档
-    const lexer = new ApiLexer(text);
-    const parser = new ApiParser(lexer);
+    const settings = await getDocumentSettings(textDocument.uri);
+    const text = textDocument.getText();
 
-    // 添加语法分析超时保护
-    const ast = (await Promise.race([
-      Promise.resolve(parser.parse(text)),
-      new Promise(
-        (_, reject) =>
-          setTimeout(() => reject(new Error("语法分析超时")), 10000) // 10秒超时
-      ),
-    ])) as any;
+    const diagnostics: Diagnostic[] = [];
 
-    // 收集符号
-    const collector = new SymbolCollector(globalSymbolTable, textDocument.uri);
-    collector.collect(ast);
+    try {
+      // 解析文档
+      const lexer = new ApiLexer(text);
+      const parser = new ApiParser(lexer);
 
-    // 检查重复定义
-    const duplicates = globalSymbolTable.getDuplicates();
-    for (const [name, symbols] of duplicates) {
-      if (symbols.length > 1) {
-        for (let i = 1; i < symbols.length; i++) {
-          const symbol = symbols[i];
-          const diagnostic: Diagnostic = {
-            severity: DiagnosticSeverity.Error,
-            range: symbol.location.range,
-            message: `Duplicate definition of '${name}'. First defined at line ${
-              symbols[0].location.range.start.line + 1
-            }.`,
-            source: "api-language",
-          };
+      // 添加语法分析超时保护（缩短超时时间）
+      const ast = (await Promise.race([
+        Promise.resolve(parser.parse(text)),
+        new Promise(
+          (_, reject) =>
+            setTimeout(() => reject(new Error("语法分析超时")), 5000) // 5秒超时
+        ),
+      ])) as any;
 
-          if (hasDiagnosticRelatedInformationCapability) {
-            diagnostic.relatedInformation = [
-              {
-                location: symbols[0].location,
-                message: "First definition here",
-              },
-            ];
+      // 检查是否取消
+      if (indexingCanceled) {
+        console.log("[VALIDATE_DOC] 检测到取消信号，停止验证");
+        return;
+      }
+
+      // 收集符号
+      const collector = new SymbolCollector(
+        globalSymbolTable,
+        textDocument.uri
+      );
+      collector.collect(ast);
+
+      // 检查重复定义
+      const duplicates = globalSymbolTable.getDuplicates();
+      for (const [name, symbols] of duplicates) {
+        if (symbols.length > 1) {
+          for (let i = 1; i < symbols.length; i++) {
+            const symbol = symbols[i];
+            const diagnostic: Diagnostic = {
+              severity: DiagnosticSeverity.Error,
+              range: symbol.location.range,
+              message: `Duplicate definition of '${name}'. First defined at line ${
+                symbols[0].location.range.start.line + 1
+              }.`,
+              source: "api-language",
+            };
+
+            if (hasDiagnosticRelatedInformationCapability) {
+              diagnostic.relatedInformation = [
+                {
+                  location: symbols[0].location,
+                  message: "First definition here",
+                },
+              ];
+            }
+
+            diagnostics.push(diagnostic);
           }
-
-          diagnostics.push(diagnostic);
         }
       }
+    } catch (error) {
+      if (error instanceof ParseError) {
+        const diagnostic: Diagnostic = {
+          severity: DiagnosticSeverity.Error,
+          range: error.token
+            ? {
+                start: {
+                  line: error.token.line - 1,
+                  character: error.token.column - 1,
+                },
+                end: {
+                  line: error.token.line - 1,
+                  character: error.token.column - 1 + error.token.value.length,
+                },
+              }
+            : {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 0 },
+              },
+          message: error.message,
+          source: "api-language",
+        };
+        diagnostics.push(diagnostic);
+      } else {
+        // 其他类型的错误（如超时错误）
+        const diagnostic: Diagnostic = {
+          severity: DiagnosticSeverity.Error,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+          message: `文档验证错误: ${(error as Error).message}`,
+          source: "api-language",
+        };
+        diagnostics.push(diagnostic);
+      }
     }
-  } catch (error) {
-    if (error instanceof ParseError) {
-      const diagnostic: Diagnostic = {
-        severity: DiagnosticSeverity.Error,
-        range: error.token
-          ? {
-              start: {
-                line: error.token.line - 1,
-                character: error.token.column - 1,
-              },
-              end: {
-                line: error.token.line - 1,
-                character: error.token.column - 1 + error.token.value.length,
-              },
-            }
-          : {
+
+    // 限制诊断数量
+    if (diagnostics.length > settings.maxNumberOfProblems) {
+      diagnostics.splice(settings.maxNumberOfProblems);
+    }
+
+    // 发送诊断结果
+    connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+  } catch (outerError) {
+    // 捕获外层错误，防止验证失败导致服务器崩溃
+    console.error("[VALIDATE] 文档验证过程失败:", outerError);
+    // 发送一个错误诊断
+    try {
+      connection.sendDiagnostics({
+        uri: textDocument.uri,
+        diagnostics: [
+          {
+            severity: DiagnosticSeverity.Error,
+            range: {
               start: { line: 0, character: 0 },
               end: { line: 0, character: 0 },
             },
-        message: error.message,
-        source: "api-language",
-      };
-      diagnostics.push(diagnostic);
+            message: `文档验证失败: ${(outerError as Error).message}`,
+            source: "api-language",
+          },
+        ],
+      });
+    } catch (diagError) {
+      console.error("[VALIDATE] 发送诊断失败:", diagError);
     }
   }
-
-  // 限制诊断数量
-  if (diagnostics.length > settings.maxNumberOfProblems) {
-    diagnostics.splice(settings.maxNumberOfProblems);
-  }
-
-  // 发送诊断结果
-  connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
 // 智能代码补全 - 使用索引系统
@@ -598,14 +709,19 @@ async function indexDocument(
     const lexer = new ApiLexer(text);
     const parser = new ApiParser(lexer);
 
-    // 添加语法分析超时保护
+    // 添加语法分析超时保护（缩短超时时间）
     const ast = (await Promise.race([
       Promise.resolve(parser.parse(text)),
       new Promise(
-        (_, reject) =>
-          setTimeout(() => reject(new Error("语法分析超时")), 10000) // 10秒超时
+        (_, reject) => setTimeout(() => reject(new Error("语法分析超时")), 5000) // 5秒超时
       ),
     ])) as any;
+
+    // 检查是否取消
+    if (indexingCanceled && fromBatchIndex) {
+      console.log("[INDEX_DOC] 检测到取消信号，停止索引");
+      return;
+    }
 
     // 收集符号
     const collector = new SymbolCollector(globalSymbolTable, document.uri);
@@ -710,8 +826,14 @@ function indexAllDocuments() {
           indexedCount++;
           totalFiles++;
 
-          // 每处理一个文档就让出执行权
+          // 每处理一个文档就让出执行权，并检查取消状态
           await new Promise((resolve) => setImmediate(resolve));
+
+          // 额外的取消检查
+          if (indexingCanceled) {
+            console.log("[INDEX_ALL] 在文档处理后检测到取消信号");
+            return;
+          }
         }
       }
 
@@ -795,6 +917,12 @@ function indexAllDocuments() {
 
           // 每处理一个文件就让出执行权，避免阻塞UI
           await new Promise((resolve) => setImmediate(resolve));
+
+          // 额外的取消检查
+          if (indexingCanceled) {
+            console.log("[INDEX_ALL] 在文件处理后检测到取消信号");
+            throw new Error("索引已取消");
+          }
         }
       } else {
         console.log("[INDEX_ALL] 没有工作区根路径，只索引已打开的文档");
@@ -853,6 +981,14 @@ function safeIndexAllDocuments() {
 
   // 异步执行，避免阻塞
   setImmediate(async () => {
+    // 整体超时保护：5分钟
+    const timeoutHandle = setTimeout(() => {
+      console.error("[SAFE_INDEX_ALL] 索引超时（5分钟），强制停止");
+      indexingCanceled = true;
+      isIndexing = false;
+      notifyIndexingStatus("error", "索引超时，已强制停止");
+    }, 5 * 60 * 1000); // 5分钟
+
     try {
       // 设置索引状态
       isIndexing = true;
@@ -873,6 +1009,12 @@ function safeIndexAllDocuments() {
 
       // 安全地索引已打开的文档
       for (const document of openDocuments) {
+        // 检查取消和超时
+        if (indexingCanceled) {
+          console.log("[SAFE_INDEX_ALL] 检测到取消信号，停止索引");
+          throw new Error("索引已取消");
+        }
+
         if (document.uri.endsWith(".api")) {
           if (isProblematicFile(document.uri)) {
             console.log(`[SAFE_INDEX_ALL] 跳过问题文件: ${document.uri}`);
@@ -965,6 +1107,12 @@ function safeIndexAllDocuments() {
         }
       }
 
+      // 检查最后一次取消状态
+      if (indexingCanceled) {
+        console.log("[SAFE_INDEX_ALL] 索引被取消");
+        throw new Error("索引已取消");
+      }
+
       // 刷新补全索引
       console.log("[SAFE_INDEX_ALL] 刷新补全索引");
       await new Promise((resolve) => setImmediate(resolve));
@@ -976,9 +1124,15 @@ function safeIndexAllDocuments() {
       } 个符号`;
 
       notifyIndexingStatus("idle", statusMessage);
+
+      // 清除超时定时器
+      clearTimeout(timeoutHandle);
     } catch (error) {
       console.error("[SAFE_INDEX_ALL] 安全索引失败:", error);
       notifyIndexingStatus("error", `安全索引失败: ${error}`);
+
+      // 清除超时定时器
+      clearTimeout(timeoutHandle);
     } finally {
       // 确保在任何情况下都重置索引状态
       isIndexing = false;
@@ -994,6 +1148,9 @@ async function scanWorkspaceForApiFiles(
 ): Promise<string[]> {
   const apiFiles: string[] = [];
   let scannedDirCount = 0;
+  const MAX_FILES = 10000; // 限制最大文件数量
+  const startTime = Date.now();
+  const SCAN_TIMEOUT = 30000; // 30秒扫描超时
 
   async function scanDirectory(
     dirPath: string,
@@ -1002,6 +1159,18 @@ async function scanWorkspaceForApiFiles(
     // 检查是否取消
     if (indexingCanceled) {
       console.log("[SCAN] 扫描已被取消");
+      throw new Error("扫描已取消");
+    }
+
+    // 检查扫描超时
+    if (Date.now() - startTime > SCAN_TIMEOUT) {
+      console.log("[SCAN] 扫描超时，停止扫描");
+      throw new Error("扫描超时");
+    }
+
+    // 检查文件数量限制
+    if (apiFiles.length >= MAX_FILES) {
+      console.log(`[SCAN] 已达到最大文件数量 ${MAX_FILES}，停止扫描`);
       return;
     }
 
@@ -1011,15 +1180,19 @@ async function scanWorkspaceForApiFiles(
     }
 
     try {
-      const entries = await fs.promises.readdir(dirPath, {
-        withFileTypes: true,
-      });
+      // 添加目录读取超时
+      const entries = await Promise.race([
+        fs.promises.readdir(dirPath, { withFileTypes: true }),
+        new Promise<any[]>((_, reject) =>
+          setTimeout(() => reject(new Error("目录读取超时")), 5000)
+        ),
+      ]);
 
       for (const entry of entries) {
         // 检查是否取消
         if (indexingCanceled) {
           console.log("[SCAN] 扫描已被取消");
-          return;
+          throw new Error("扫描已取消");
         }
 
         const fullPath = path.join(dirPath, entry.name);
@@ -1027,27 +1200,32 @@ async function scanWorkspaceForApiFiles(
         if (entry.isDirectory()) {
           // 跳过常见的忽略目录
           if (shouldSkipDirectory(entry.name)) {
-            console.log(`[SCAN] 跳过目录: ${fullPath}`);
             continue;
           }
 
-          console.log(
-            `[SCAN] 扫描子目录 (深度 ${currentDepth + 1}): ${fullPath}`
-          );
-
           // 每扫描几个目录就让出执行权
           scannedDirCount++;
-          if (scannedDirCount % 5 === 0) {
+          if (scannedDirCount % 3 === 0) {
             await new Promise((resolve) => setImmediate(resolve));
           }
 
           await scanDirectory(fullPath, currentDepth + 1);
         } else if (entry.isFile() && entry.name.endsWith(".api")) {
-          console.log(`[SCAN] 找到 API 文件: ${fullPath}`);
-          apiFiles.push(fullPath);
+          // 在添加到列表前，验证文件确实存在且可读
+          try {
+            await fs.promises.access(fullPath, fs.constants.R_OK);
+            apiFiles.push(fullPath);
+          } catch (error) {
+            // 文件可能已被删除或无法读取，跳过
+            console.log(`[SCAN] 跳过无法访问的文件: ${fullPath}`);
+          }
         }
       }
     } catch (error) {
+      const errorMsg = (error as Error).message;
+      if (errorMsg === "扫描已取消" || errorMsg === "扫描超时") {
+        throw error;
+      }
       console.warn(`[SCAN] 无法读取目录 ${dirPath}:`, error);
     }
   }
@@ -1055,7 +1233,18 @@ async function scanWorkspaceForApiFiles(
   console.log(
     `[SCAN] 开始扫描工作区 (最大深度: ${maxDepth}): ${workspaceRoot}`
   );
-  await scanDirectory(workspaceRoot, 0);
+
+  try {
+    await scanDirectory(workspaceRoot, 0);
+  } catch (error) {
+    const errorMsg = (error as Error).message;
+    if (errorMsg === "扫描已取消") {
+      console.log(`[SCAN] 扫描被取消，找到 ${apiFiles.length} 个 .api 文件`);
+    } else if (errorMsg === "扫描超时") {
+      console.log(`[SCAN] 扫描超时，找到 ${apiFiles.length} 个 .api 文件`);
+    }
+  }
+
   console.log(`[SCAN] 扫描完成，共找到 ${apiFiles.length} 个 .api 文件`);
 
   return apiFiles;
@@ -1093,12 +1282,19 @@ async function indexWorkspaceFile(filePath: string): Promise<void> {
 
     console.log(`[INDEX_FILE] 开始索引工作区文件: ${filePath}`);
 
-    // 添加文件读取超时保护，防止卡在特定文件
+    // 首先检查文件是否存在
+    try {
+      await fs.promises.access(filePath, fs.constants.F_OK);
+    } catch (error) {
+      console.warn(`[INDEX_FILE] 文件不存在，跳过: ${filePath}`);
+      throw new Error(`文件不存在: ${filePath}`);
+    }
+
+    // 添加文件读取超时保护，防止卡在特定文件（缩短超时时间）
     const fileContent = await Promise.race([
       fs.promises.readFile(filePath, "utf8"),
       new Promise<string>(
-        (_, reject) =>
-          setTimeout(() => reject(new Error("文件读取超时")), 10000) // 10秒超时
+        (_, reject) => setTimeout(() => reject(new Error("文件读取超时")), 5000) // 5秒超时
       ),
     ]);
 
@@ -1150,12 +1346,11 @@ async function indexWorkspaceFile(filePath: string): Promise<void> {
       throw new Error("索引已取消");
     }
 
-    // 添加语法分析超时保护，防止在特定语法结构上陷入死循环
+    // 添加语法分析超时保护，防止在特定语法结构上陷入死循环（缩短超时时间）
     const ast = (await Promise.race([
       Promise.resolve(parser.parse(fileContent)),
       new Promise(
-        (_, reject) =>
-          setTimeout(() => reject(new Error("语法分析超时")), 15000) // 15秒超时
+        (_, reject) => setTimeout(() => reject(new Error("语法分析超时")), 8000) // 8秒超时
       ),
     ])) as any; // 类型断言解决Promise.race的类型问题
 
@@ -1172,12 +1367,11 @@ async function indexWorkspaceFile(filePath: string): Promise<void> {
       throw new Error("索引已取消");
     }
 
-    // 添加符号收集超时保护
+    // 添加符号收集超时保护（缩短超时时间）
     await Promise.race([
       Promise.resolve(collector.collect(ast)),
       new Promise(
-        (_, reject) =>
-          setTimeout(() => reject(new Error("符号收集超时")), 10000) // 10秒超时
+        (_, reject) => setTimeout(() => reject(new Error("符号收集超时")), 5000) // 5秒超时
       ),
     ]);
 
@@ -1190,10 +1384,17 @@ async function indexWorkspaceFile(filePath: string): Promise<void> {
       })`
     );
   } catch (error) {
-    console.warn(
-      `[INDEX_FILE] 工作区文件索引失败: ${filePath}`,
-      (error as Error).message
-    );
+    const errorMsg = (error as Error).message;
+
+    // 对文件不存在的错误进行特殊处理，不打印堆栈
+    if (errorMsg.includes("文件不存在") || errorMsg.includes("ENOENT")) {
+      console.log(`[INDEX_FILE] 跳过不存在的文件: ${filePath}`);
+    } else {
+      console.warn(`[INDEX_FILE] 工作区文件索引失败: ${filePath}`, errorMsg);
+    }
+
+    // 重新抛出错误以便上层处理
+    throw error;
   }
 }
 
@@ -1904,6 +2105,11 @@ function formatFieldDefinition(line: string, indent: string): string {
   return indent + line;
 }
 
+// ========================================
+// 索引系统总开关 - 设置为 false 完全禁用索引
+// ========================================
+const INDEXING_ENABLED = false; // ⚠️ 设置为 true 启用索引，false 禁用
+
 // 索引状态管理
 let isIndexing = false;
 let indexingCanceled = false;
@@ -1965,6 +2171,10 @@ function notifyIndexingStatus(status: string, message: string) {
   }
 }
 
+// 以下命令已删除，只保留 absoluteRestart
+// 如需重新索引，请使用 api.absoluteRestart
+
+/*
 // 处理重新索引请求
 connection.onRequest("api/reindexAll", async () => {
   console.log("[REINDEX] 收到重新索引请求");
@@ -2183,7 +2393,9 @@ connection.onRequest("api/reindexAll", async () => {
     }
   }
 });
+*/
 
+/*
 // 处理取消索引请求
 connection.onRequest("api/cancelIndexing", async () => {
   console.log("[CANCEL] 收到取消索引请求");
@@ -2201,7 +2413,9 @@ connection.onRequest("api/cancelIndexing", async () => {
   await forceCancelIndexing();
   console.log("[CANCEL] 索引取消完成");
 });
+*/
 
+/*
 // 处理清空索引请求
 connection.onRequest("api/clearIndex", async () => {
   console.log("[CLEAR] 收到清空索引请求");
@@ -2224,7 +2438,9 @@ connection.onRequest("api/clearIndex", async () => {
   console.log("[CLEAR] 清空操作完成");
   notifyIndexingStatus("idle", "索引和缓存已清空");
 });
+*/
 
+/*
 // 处理强制重置并重新索引请求
 connection.onRequest("api/forceResetAndReindex", async () => {
   console.log("[FORCE_RESET] 收到强制重置并重新索引请求");
@@ -2278,10 +2494,17 @@ connection.onRequest("api/forceResetAndReindex", async () => {
     throw error;
   }
 });
+*/
 
+// ============================================
+// 唯一保留的索引命令：绝对重启
+// ============================================
 // 处理绝对重启请求（杀死一切，从零开始）
 connection.onRequest("api/absoluteRestart", async () => {
   console.log("[ABSOLUTE_RESTART] 收到绝对重启请求");
+  console.log(
+    `[ABSOLUTE_RESTART] 索引系统状态: ${INDEXING_ENABLED ? "启用" : "禁用"}`
+  );
 
   try {
     console.log("[ABSOLUTE_RESTART] ===== 执行绝对重启 =====");
@@ -2310,23 +2533,31 @@ connection.onRequest("api/absoluteRestart", async () => {
     // 清理文档设置缓存
     documentSettings.clear();
 
-    // 等待 2 秒确保一切都停止了
-    console.log("[ABSOLUTE_RESTART] 等待 2 秒确保彻底清理...");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // 重置标志
+    // 重置标志（立即重置，不要等待）
     indexingCanceled = false;
 
-    console.log("[ABSOLUTE_RESTART] 绝对重启完成，开始安全索引...");
-    notifyIndexingStatus("indexing", "绝对重启完成，开始安全索引...");
+    if (!INDEXING_ENABLED) {
+      console.log("[ABSOLUTE_RESTART] 索引系统已禁用，只清理状态，不启动索引");
+      notifyIndexingStatus("idle", "已清理状态（索引系统已禁用）");
+      return "已清理状态（索引系统已禁用）";
+    }
 
-    // 延迟启动安全索引（跳过问题文件）
-    setTimeout(() => {
-      console.log("[ABSOLUTE_RESTART] 启动安全索引进程（跳过问题文件）");
-      safeIndexAllDocuments();
-    }, 1000);
+    console.log("[ABSOLUTE_RESTART] 清理完成，准备重新索引");
+    notifyIndexingStatus("indexing", "清理完成，准备重新索引...");
 
-    return "绝对重启完成，全新索引已启动";
+    // 立即在后台启动安全索引，不要阻塞请求返回
+    setImmediate(() => {
+      console.log("[ABSOLUTE_RESTART] 启动安全索引进程");
+      try {
+        safeIndexAllDocuments();
+      } catch (error) {
+        console.error("[ABSOLUTE_RESTART] 启动安全索引失败:", error);
+        notifyIndexingStatus("error", "启动索引失败");
+      }
+    });
+
+    console.log("[ABSOLUTE_RESTART] 绝对重启命令已完成，索引在后台运行");
+    return "绝对重启完成，索引已在后台启动";
   } catch (error) {
     console.error("[ABSOLUTE_RESTART] 绝对重启失败:", error);
 
@@ -2339,6 +2570,7 @@ connection.onRequest("api/absoluteRestart", async () => {
   }
 });
 
+/*
 // 处理紧急停止请求（立即重置所有状态）
 connection.onRequest("api/emergencyStop", async () => {
   console.log("[EMERGENCY] 收到紧急停止请求");
@@ -2362,7 +2594,9 @@ connection.onRequest("api/emergencyStop", async () => {
   console.log("[EMERGENCY] 紧急停止完成");
   return "所有索引操作已紧急停止";
 });
+*/
 
+/*
 // 处理获取索引状态请求（调试用）
 connection.onRequest("api/getIndexStatus", async () => {
   console.log("[DEBUG] 收到获取索引状态请求");
@@ -2388,6 +2622,7 @@ connection.onRequest("api/getIndexStatus", async () => {
   console.log("[DEBUG] 当前索引状态:", JSON.stringify(status, null, 2));
   return status;
 });
+*/
 
 // 让文档管理器监听连接
 documents.listen(connection);
@@ -2396,11 +2631,18 @@ documents.listen(connection);
 process.on("SIGTERM", () => {
   console.log("[CLEANUP] 收到 SIGTERM，开始清理资源");
   clearAllTimers();
+
+  // 设置强制退出超时
+  setTimeout(() => {
+    console.log("[CLEANUP] SIGTERM处理超时，强制退出");
+    process.exit(0);
+  }, 100);
+
   process.exit(0);
 });
 
-process.on("exit", () => {
-  console.log("[CLEANUP] 进程退出，清理剩余资源");
+process.on("exit", (code) => {
+  console.log(`[CLEANUP] 进程退出，退出码: ${code}，清理剩余资源`);
   clearAllTimers();
 });
 
@@ -2434,25 +2676,37 @@ connection.onExit(() => {
   // 清理所有定时器
   clearAllTimers();
 
-  console.log("[CLEANUP] 连接退出处理完成，强制退出进程");
+  console.log("[CLEANUP] 连接退出处理完成，立即强制退出进程");
 
-  // 立即强制退出，多层保险机制
-  setImmediate(() => {
-    console.log("[CLEANUP] 立即强制退出进程 (setImmediate)");
+  // 多层保险机制，确保进程一定会退出
+
+  // 第一层：立即尝试退出
+  process.nextTick(() => {
+    console.log("[CLEANUP] nextTick强制退出");
     process.exit(0);
   });
 
-  // 超快速退出保险（50ms）
-  setTimeout(() => {
-    console.log("[CLEANUP] 超快速退出保险 (50ms)");
+  // 第二层：使用setImmediate
+  setImmediate(() => {
+    console.log("[CLEANUP] setImmediate强制退出");
     process.exit(0);
-  }, 50);
+  });
 
-  // 最终退出保险（200ms）
+  // 第三层：30ms后强制退出
   setTimeout(() => {
-    console.log("[CLEANUP] 最终退出保险 (200ms)");
-    process.kill(process.pid, "SIGKILL");
-  }, 200);
+    console.log("[CLEANUP] 30ms超时强制退出");
+    process.exit(0);
+  }, 30);
+
+  // 第四层：100ms后使用SIGKILL
+  setTimeout(() => {
+    console.log("[CLEANUP] 100ms超时SIGKILL强制退出");
+    try {
+      process.kill(process.pid, "SIGKILL");
+    } catch (e) {
+      process.exit(1);
+    }
+  }, 100);
 });
 
 // 添加进程信号处理，确保异常退出时也能清理资源
@@ -2463,7 +2717,8 @@ function gracefulShutdown(signal: string) {
 
   // 防止重复调用
   if (processShutdownInitiated) {
-    console.log("[CLEANUP] 关闭已在进行中，跳过重复调用");
+    console.log("[CLEANUP] 关闭已在进行中，立即退出");
+    process.exit(0);
     return;
   }
   processShutdownInitiated = true;
@@ -2476,27 +2731,36 @@ function gracefulShutdown(signal: string) {
   }
 
   // 清理所有定时器
-  clearAllTimers();
+  try {
+    clearAllTimers();
+  } catch (e) {
+    console.error("[CLEANUP] 清理定时器失败:", e);
+  }
 
   console.log("[CLEANUP] 资源清理完成，立即强制退出进程");
 
-  // 多种强制退出方式
-  setImmediate(() => {
-    console.log("[CLEANUP] setImmediate 强制退出");
+  // 多层强制退出保险
+  process.nextTick(() => {
+    console.log("[CLEANUP] nextTick强制退出");
     process.exit(0);
   });
 
-  // 备用退出方式
+  setImmediate(() => {
+    console.log("[CLEANUP] setImmediate强制退出");
+    process.exit(0);
+  });
+
+  // 50ms后使用SIGKILL
   setTimeout(() => {
-    console.log("[CLEANUP] setTimeout 备用退出");
+    console.log("[CLEANUP] 50ms超时SIGKILL");
     try {
       process.kill(process.pid, "SIGKILL");
     } catch (e) {
       process.exit(1);
     }
-  }, 100);
+  }, 50);
 
-  // 立即退出
+  // 立即尝试退出
   process.exit(0);
 } // 监听常见的退出信号（移除重复处理）
 // process.on("SIGINT", ...) 等在上面的保险机制中已经处理
@@ -2508,13 +2772,47 @@ process.on("SIGUSR2", () => gracefulShutdown("SIGUSR2"));
 
 // 添加未捕获异常和未处理的 Promise 拒绝处理
 process.on("uncaughtException", (error) => {
-  console.error("[CLEANUP] 未捕获的异常:", error);
-  gracefulShutdown("uncaughtException");
+  console.error("[ERROR] 未捕获的异常:", error);
+  console.error("[ERROR] 堆栈:", error.stack);
+
+  // 不要立即退出，尝试恢复
+  try {
+    // 重置索引状态，防止卡住
+    if (isIndexing) {
+      console.log("[ERROR] 重置索引状态");
+      isIndexing = false;
+      indexingCanceled = false;
+    }
+
+    // 清理定时器
+    clearAllTimers();
+
+    console.log("[ERROR] 服务器状态已重置，继续运行");
+  } catch (recoveryError) {
+    console.error("[ERROR] 恢复失败，准备退出:", recoveryError);
+    // 只有在恢复失败时才退出
+    setTimeout(() => {
+      gracefulShutdown("uncaughtException");
+    }, 1000);
+  }
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  console.error("[CLEANUP] 未处理的 Promise 拒绝:", reason, promise);
-  gracefulShutdown("unhandledRejection");
+  console.error("[ERROR] 未处理的 Promise 拒绝:", reason);
+  console.error("[ERROR] Promise:", promise);
+
+  // 不要立即退出，记录错误但继续运行
+  try {
+    // 如果是索引相关的错误，重置状态
+    if (isIndexing) {
+      console.log("[ERROR] 索引过程中发生Promise拒绝，重置索引状态");
+      isIndexing = false;
+      indexingCanceled = false;
+      notifyIndexingStatus("error", "索引过程中发生错误");
+    }
+  } catch (recoveryError) {
+    console.error("[ERROR] 处理Promise拒绝时发生错误:", recoveryError);
+  }
 });
 
 // 添加绝对退出保险机制
@@ -2524,11 +2822,17 @@ function forceExitAfterDelay() {
   shutdownInitiated = true;
   processShutdownInitiated = true;
 
-  console.log("[CLEANUP] 启动2秒强制退出保险机制");
+  console.log("[CLEANUP] 启动1秒强制退出保险机制");
+
+  // 缩短超时时间，更快退出
   setTimeout(() => {
-    console.log("[CLEANUP] 2秒保险机制触发，强制退出进程");
-    process.exit(1);
-  }, 2000);
+    console.log("[CLEANUP] 1秒保险机制触发，使用SIGKILL强制退出进程");
+    try {
+      process.kill(process.pid, "SIGKILL");
+    } catch (e) {
+      process.exit(1);
+    }
+  }, 1000);
 }
 
 // 监听所有可能的退出信号，触发保险机制
