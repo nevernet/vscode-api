@@ -640,6 +640,7 @@ connection.onDocumentFormatting(
       ];
     } catch (error) {
       console.error("Formatting error:", error);
+      // 确保即使出错也返回空数组，而不是未定义的值
       return [];
     }
   }
@@ -649,11 +650,23 @@ function formatApiDocument(
   text: string,
   formatSettings: { indentSize: number; alignFields: boolean }
 ): string {
-  const lines = text.split("\n");
-  const formattedLines: string[] = [];
-  let indentLevel = 0;
-  const indentSize = formatSettings.indentSize; // 使用配置的缩进大小
-  let currentContext: string[] = []; // 跟踪当前上下文
+  try {
+    // 输入验证
+    if (!text || typeof text !== 'string') {
+      console.warn("Invalid text input for formatting");
+      return text || '';
+    }
+    
+    if (!formatSettings || typeof formatSettings.indentSize !== 'number') {
+      console.warn("Invalid format settings");
+      return text;
+    }
+
+    const lines = text.split("\n");
+    const formattedLines: string[] = [];
+    let indentLevel = 0;
+    const indentSize = Math.max(0, formatSettings.indentSize); // 确保缩进大小不为负数
+    let currentContext: string[] = []; // 跟踪当前上下文
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -748,6 +761,11 @@ function formatApiDocument(
   }
 
   return formattedLines.join("\n");
+  } catch (error) {
+    console.error("Format document internal error:", error);
+    // 如果格式化失败，返回原始文本
+    return text;
+  }
 }
 
 function isFieldDefinition(line: string): boolean {
