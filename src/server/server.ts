@@ -30,6 +30,7 @@ import {
   KEYWORDS,
   CONSTANTS,
 } from "./symbols";
+import { CompletionIndex, analyzeCompletionContext as analyzeSmartCompletionContext } from "./completion-index";
 
 // 配置接口
 interface ApiLanguageServerSettings {
@@ -49,6 +50,9 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 // 全局符号表
 const globalSymbolTable = new SymbolTable();
+
+// 代码补全索引
+const completionIndex = new CompletionIndex(globalSymbolTable);
 
 // 默认设置
 const defaultSettings: ApiLanguageServerSettings = {
@@ -265,7 +269,7 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
-// 代码补全 - 超轻量级版本
+// 智能代码补全 - 使用索引系统
 connection.onCompletion(
   (textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
     try {
@@ -276,44 +280,32 @@ connection.onCompletion(
 
       const text = document.getText();
 
-      // 严格的性能保护：对于任何较大文档，只返回最基本的补全
-      if (text.length > 5000) {
-        // 5KB 严格限制
-        return [
-          { label: "struct", kind: CompletionItemKind.Keyword },
-          { label: "api", kind: CompletionItemKind.Keyword },
-          { label: "int", kind: CompletionItemKind.TypeParameter },
-          { label: "string", kind: CompletionItemKind.TypeParameter },
-        ];
+      // 性能保护：对于超大文档，返回基础补全
+      if (text.length > 50000) {
+        console.warn("Document too large for smart completion:", text.length);
+        return completionIndex.getBasicCompletions();
       }
 
       const position = textDocumentPosition.position;
       const lines = text.split("\n");
       const currentLine = lines[position.line] || "";
 
-      // 非常简单的上下文检测 - 只检查当前行
-      const line = currentLine.trim().toLowerCase();
-      const items: CompletionItem[] = [];
+      // 使用智能上下文分析
+      const context = analyzeSmartCompletionContext(currentLine, lines, position);
+      
+      // 根据上下文获取智能补全建议
+      const contextualItems = completionIndex.getContextualCompletions(context);
 
-      if (line.includes("struct")) {
-        // 结构体定义
-        addTypeCompletions(items);
-      } else if (line.includes("api")) {
-        // API定义
-        addApiBodyKeywords(items);
-      } else if (line.includes("input") || line.includes("output")) {
-        // 输入输出
-        addStructCompletions(items);
-      } else {
-        // 默认情况
-        addGlobalKeywords(items);
+      // 如果上下文补全项为空，提供基础补全
+      if (contextualItems.length === 0) {
+        return completionIndex.getBasicCompletions();
       }
 
-      // 限制返回数量，防止过多选项
-      return items.slice(0, 10);
+      return contextualItems;
     } catch (error) {
       console.error("Completion error:", error);
-      return [];
+      // 错误时返回基础补全而不是空数组
+      return completionIndex.getBasicCompletions();
     }
   }
 );
@@ -329,6 +321,9 @@ function indexDocument(document: TextDocument) {
     // 收集符号
     const collector = new SymbolCollector(globalSymbolTable, document.uri);
     collector.collect(ast);
+    
+    // 刷新补全索引
+    completionIndex.refresh();
   } catch (error) {
     // 解析错误不影响自动完成功能
     console.warn("Document indexing failed:", (error as Error).message);
@@ -461,7 +456,7 @@ connection.onDefinition(
       }
 
       const text = document.getText();
-      
+
       // 性能保护：限制文档大小
       if (text.length > 500000) {
         console.warn("Document too large for definition lookup:", text.length);
@@ -476,18 +471,27 @@ connection.onDefinition(
 
       // 向前查找词的开始（限制搜索范围）
       const maxSearchBack = 50; // 最多向前搜索50个字符
-      while (start > Math.max(0, offset - maxSearchBack) && start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
+      while (
+        start > Math.max(0, offset - maxSearchBack) &&
+        start > 0 &&
+        /[a-zA-Z0-9_]/.test(text[start - 1])
+      ) {
         start--;
       }
 
       // 向后查找词的结束（限制搜索范围）
       const maxSearchForward = 50; // 最多向后搜索50个字符
-      while (end < Math.min(text.length, offset + maxSearchForward) && end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
+      while (
+        end < Math.min(text.length, offset + maxSearchForward) &&
+        end < text.length &&
+        /[a-zA-Z0-9_]/.test(text[end])
+      ) {
         end++;
       }
 
       const word = text.substring(start, end);
-      if (!word || word.length > 100) { // 防止异常长的词
+      if (!word || word.length > 100) {
+        // 防止异常长的词
         return null;
       }
 
@@ -515,7 +519,7 @@ connection.onReferences((params): Location[] => {
     }
 
     const text = document.getText();
-    
+
     // 性能保护：限制文档大小
     if (text.length > 200000) {
       console.warn("Document too large for reference search:", text.length);
@@ -530,11 +534,19 @@ connection.onReferences((params): Location[] => {
     const maxSearchBack = 50;
     const maxSearchForward = 50;
 
-    while (start > Math.max(0, offset - maxSearchBack) && start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
+    while (
+      start > Math.max(0, offset - maxSearchBack) &&
+      start > 0 &&
+      /[a-zA-Z0-9_]/.test(text[start - 1])
+    ) {
       start--;
     }
 
-    while (end < Math.min(text.length, offset + maxSearchForward) && end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
+    while (
+      end < Math.min(text.length, offset + maxSearchForward) &&
+      end < text.length &&
+      /[a-zA-Z0-9_]/.test(text[end])
+    ) {
       end++;
     }
 
@@ -546,17 +558,20 @@ connection.onReferences((params): Location[] => {
     // 限制搜索行数，避免大文档卡死
     const lines = text.split("\n");
     const maxLines = Math.min(lines.length, 10000); // 最多搜索10000行
-    
+
     for (let lineIndex = 0; lineIndex < maxLines; lineIndex++) {
       const line = lines[lineIndex];
-      
+
       // 避免在非常长的行上进行正则搜索
       if (line.length > 1000) {
         continue;
       }
-      
+
       let match;
-      const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "g");
+      const regex = new RegExp(
+        `\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+        "g"
+      );
 
       while ((match = regex.exec(line)) !== null) {
         const location: Location = {
@@ -567,7 +582,7 @@ connection.onReferences((params): Location[] => {
           },
         };
         locations.push(location);
-        
+
         // 防止找到过多引用导致性能问题
         if (locations.length > 1000) {
           console.warn("Too many references found, limiting results");
@@ -592,7 +607,7 @@ connection.onHover((params): { contents: string } | null => {
     }
 
     const text = document.getText();
-    
+
     // 性能保护：限制文档大小
     if (text.length > 500000) {
       console.warn("Document too large for hover lookup:", text.length);
@@ -607,11 +622,19 @@ connection.onHover((params): { contents: string } | null => {
     const maxSearchBack = 50;
     const maxSearchForward = 50;
 
-    while (start > Math.max(0, offset - maxSearchBack) && start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
+    while (
+      start > Math.max(0, offset - maxSearchBack) &&
+      start > 0 &&
+      /[a-zA-Z0-9_]/.test(text[start - 1])
+    ) {
       start--;
     }
 
-    while (end < Math.min(text.length, offset + maxSearchForward) && end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
+    while (
+      end < Math.min(text.length, offset + maxSearchForward) &&
+      end < text.length &&
+      /[a-zA-Z0-9_]/.test(text[end])
+    ) {
       end++;
     }
 
@@ -624,7 +647,9 @@ connection.onHover((params): { contents: string } | null => {
     const symbol = globalSymbolTable.getSymbol(word);
     if (symbol) {
       return {
-        contents: `**${symbol.detail || symbol.name}**\n\n${symbol.documentation || ""}`,
+        contents: `**${symbol.detail || symbol.name}**\n\n${
+          symbol.documentation || ""
+        }`,
       };
     }
 
