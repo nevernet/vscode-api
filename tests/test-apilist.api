@@ -1,0 +1,99 @@
+// 测试新的 apilist 和内联结构体语法
+
+// 全局结构体定义
+typedef struct {
+    id number
+    name string
+} PageInput
+
+typedef struct {
+    total number
+    pageSize number
+    currentPage number
+} PageOutput
+
+typedef struct {
+    message string
+    success boolean
+} DefaultOutput
+
+typedef struct {
+    id number
+    name string
+    config string
+    groupId number
+} CardConfigListData
+
+// 测试 apilist 语法
+apilist "cardconfig" {
+    // 第一个API - 使用内联结构体
+    api "list" {
+        input struct {
+            pageSize number
+            pageIndex number
+            group_id number     // 可选字段注释：[[所属组]]
+            ss_customer_id number // 可选字段注释：[[所属客户]]
+        }
+        output struct {
+            message string
+            success boolean
+            data struct {
+                total number
+                items string
+            }
+        }
+    }
+
+    // 第二个API - 使用引用结构体
+    api "create" {
+        input CardConfigListData
+        output struct {
+            message string
+            success boolean
+            data CardConfigListData
+        }
+    }
+
+    // 第三个API - 测试重复名称（这应该报错）
+    api "list" {
+        input PageInput
+        output DefaultOutput
+    }
+}
+
+// 另一个 apilist
+apilist "usermanager" {
+    api "login" {
+        input struct {
+            username string
+            password string
+        }
+        output struct {
+            token string
+            user struct {
+                id number
+                name string
+                email string
+            }
+        }
+    }
+
+    api "logout" {
+        input struct {}
+        output DefaultOutput
+    }
+}
+
+// 测试全局重复 - 这应该报错
+apilist "cardconfig" {
+    api "duplicate" {
+        input struct {}
+        output struct {}
+    }
+}
+
+// 测试全局结构体重复 - 这应该报错
+typedef struct {
+    id string
+    description string
+} PageInput

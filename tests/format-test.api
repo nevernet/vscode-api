@@ -1,0 +1,38 @@
+// 测试格式化功能
+typedef struct user {
+id int
+name string
+email string
+}
+
+typedef enum status {
+active
+inactive
+pending
+}
+
+apilist "user" {
+input struct {
+    search string
+    limit int
+}
+output struct {
+    users []user
+    total int
+}
+data struct {
+    cache_key string
+}
+}
+
+// 嵌套结构
+typedef struct config {
+db struct {
+host string
+port int
+}
+redis struct {
+url string
+timeout int
+}
+}

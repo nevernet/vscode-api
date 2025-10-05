@@ -14,6 +14,8 @@ import {
   Location,
   Position,
   Range,
+  DocumentFormattingParams,
+  TextEdit,
 } from "vscode-languageserver/node";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -29,6 +31,16 @@ import {
   CONSTANTS,
 } from "./symbols";
 
+// 配置接口
+interface ApiLanguageServerSettings {
+  maxNumberOfProblems: number;
+  format: {
+    enable: boolean;
+    indentSize: number;
+    alignFields: boolean;
+  };
+}
+
 // 创建服务器连接
 const connection = createConnection(ProposedFeatures.all);
 
@@ -38,13 +50,15 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 // 全局符号表
 const globalSymbolTable = new SymbolTable();
 
-// 配置接口
-interface ApiLanguageServerSettings {
-  maxNumberOfProblems: number;
-}
-
 // 默认设置
-const defaultSettings: ApiLanguageServerSettings = { maxNumberOfProblems: 100 };
+const defaultSettings: ApiLanguageServerSettings = {
+  maxNumberOfProblems: 100,
+  format: {
+    enable: true,
+    indentSize: 2,
+    alignFields: true,
+  },
+};
 let globalSettings: ApiLanguageServerSettings = defaultSettings;
 
 // 文档设置缓存
@@ -87,6 +101,8 @@ connection.onInitialize((params: InitializeParams) => {
       referencesProvider: true,
       // 支持悬停信息
       hoverProvider: true,
+      // 支持文档格式化
+      documentFormattingProvider: true,
     },
   };
 
@@ -239,75 +255,245 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
 
 // 代码补全
 connection.onCompletion(
-  (_textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
+  (textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
     const items: CompletionItem[] = [];
+    const document = documents.get(textDocumentPosition.textDocument.uri);
 
-    // 添加关键字补全
-    for (const keyword of KEYWORDS) {
-      items.push({
-        label: keyword,
-        kind: CompletionItemKind.Keyword,
-        detail: `keyword`,
-        documentation: `API language keyword: ${keyword}`,
-      });
+    if (!document) {
+      return items;
     }
 
-    // 添加常量补全
-    for (const constant of CONSTANTS) {
-      items.push({
-        label: constant,
-        kind: CompletionItemKind.Constant,
-        detail: `constant`,
-        documentation: `API language constant: ${constant}`,
-      });
-    }
+    const text = document.getText();
+    const position = textDocumentPosition.position;
+    const lines = text.split("\n");
+    const currentLine = lines[position.line] || "";
+    const currentLineToPosition = currentLine.substring(0, position.character);
 
-    // 添加内置类型补全
-    const builtinSymbols = getBuiltinSymbols();
-    for (const symbol of builtinSymbols) {
-      items.push({
-        label: symbol.name,
-        kind: CompletionItemKind.TypeParameter,
-        detail: symbol.detail,
-        documentation: symbol.documentation,
-      });
-    }
+    // 分析当前上下文
+    const context = analyzeCompletionContext(
+      currentLineToPosition,
+      lines,
+      position
+    );
 
-    // 添加用户定义的符号补全
-    const userSymbols = globalSymbolTable.getAllSymbols();
-    for (const symbol of userSymbols) {
-      let kind: CompletionItemKind;
-      switch (symbol.kind) {
-        case SymbolKind.Struct:
-          kind = CompletionItemKind.Struct;
-          break;
-        case SymbolKind.Field:
-          kind = CompletionItemKind.Field;
-          break;
-        case SymbolKind.Enum:
-          kind = CompletionItemKind.Enum;
-          break;
-        case SymbolKind.EnumValue:
-          kind = CompletionItemKind.EnumMember;
-          break;
-        case SymbolKind.Api:
-          kind = CompletionItemKind.Function;
-          break;
-        default:
-          kind = CompletionItemKind.Text;
-      }
-
-      items.push({
-        label: symbol.name,
-        kind,
-        detail: symbol.detail,
-        documentation: symbol.documentation,
-      });
+    // 根据上下文提供不同的补全建议
+    switch (context.type) {
+      case "struct-reference":
+        // 在需要结构体引用的地方（如 input, output）
+        addStructCompletions(items);
+        break;
+      case "field-definition":
+        // 在字段定义中
+        addTypeCompletions(items);
+        addStructCompletions(items);
+        break;
+      case "api-definition":
+        // 在API定义中
+        addApiBodyKeywords(items);
+        break;
+      case "global-scope":
+        // 在全局作用域
+        addGlobalKeywords(items);
+        break;
+      default:
+        // 默认补全
+        addAllCompletions(items);
     }
 
     return items;
   }
 );
+
+// 分析补全上下文
+function analyzeCompletionContext(
+  currentLineToPosition: string,
+  lines: string[],
+  position: Position
+) {
+  const line = currentLineToPosition.trim();
+
+  // 检查是否在 input 或 output 语句中
+  if (line.includes("input ") || line.includes("output ")) {
+    return { type: "struct-reference" };
+  }
+
+  // 检查是否在 API 定义内部
+  let braceLevel = 0;
+  let inApiDefinition = false;
+  let inApiListDefinition = false;
+
+  for (let i = 0; i <= position.line; i++) {
+    const lineText = lines[i];
+    if (lineText.includes("api ") && lineText.includes("{")) {
+      inApiDefinition = true;
+    }
+    if (lineText.includes("apilist ") && lineText.includes("{")) {
+      inApiListDefinition = true;
+    }
+
+    // 计算大括号层级
+    for (const char of lineText) {
+      if (char === "{") braceLevel++;
+      if (char === "}") braceLevel--;
+    }
+  }
+
+  if (inApiDefinition && braceLevel > 0) {
+    return { type: "api-definition" };
+  }
+
+  if (inApiListDefinition && braceLevel > 0) {
+    return { type: "api-definition" };
+  }
+
+  // 检查是否在结构体定义中
+  if (
+    line.includes("struct {") ||
+    (braceLevel > 0 &&
+      lines.slice(0, position.line).some((l) => l.includes("struct {")))
+  ) {
+    return { type: "field-definition" };
+  }
+
+  return { type: "global-scope" };
+}
+
+// 添加结构体补全
+function addStructCompletions(items: CompletionItem[]) {
+  const structSymbols = globalSymbolTable.getSymbolsOfKind(SymbolKind.Struct);
+  for (const symbol of structSymbols) {
+    items.push({
+      label: symbol.name,
+      kind: CompletionItemKind.Struct,
+      detail: symbol.detail,
+      documentation: symbol.documentation,
+      sortText: "0" + symbol.name, // 优先显示
+    });
+  }
+}
+
+// 添加类型补全
+function addTypeCompletions(items: CompletionItem[]) {
+  // 内置类型
+  const builtinTypes = [
+    "int",
+    "long",
+    "uint",
+    "ulong",
+    "bool",
+    "boolean",
+    "float",
+    "double",
+    "string",
+    "number",
+  ];
+  for (const type of builtinTypes) {
+    items.push({
+      label: type,
+      kind: CompletionItemKind.TypeParameter,
+      detail: `built-in type`,
+      documentation: `Built-in type: ${type}`,
+      sortText: "1" + type,
+    });
+  }
+
+  // 用户定义的结构体也可以作为类型使用
+  addStructCompletions(items);
+}
+
+// 添加API体关键字
+function addApiBodyKeywords(items: CompletionItem[]) {
+  const apiKeywords = ["input", "output", "extract"];
+  for (const keyword of apiKeywords) {
+    items.push({
+      label: keyword,
+      kind: CompletionItemKind.Keyword,
+      detail: `API keyword`,
+      documentation: `API body keyword: ${keyword}`,
+      sortText: "0" + keyword,
+    });
+  }
+}
+
+// 添加全局关键字
+function addGlobalKeywords(items: CompletionItem[]) {
+  const globalKeywords = ["typedef", "struct", "enum", "api", "apilist"];
+  for (const keyword of globalKeywords) {
+    items.push({
+      label: keyword,
+      kind: CompletionItemKind.Keyword,
+      detail: `keyword`,
+      documentation: `Global keyword: ${keyword}`,
+      sortText: "0" + keyword,
+    });
+  }
+}
+
+// 添加所有补全（回退选项）
+function addAllCompletions(items: CompletionItem[]) {
+  // 添加关键字补全
+  for (const keyword of KEYWORDS) {
+    items.push({
+      label: keyword,
+      kind: CompletionItemKind.Keyword,
+      detail: `keyword`,
+      documentation: `API language keyword: ${keyword}`,
+    });
+  }
+
+  // 添加常量补全
+  for (const constant of CONSTANTS) {
+    items.push({
+      label: constant,
+      kind: CompletionItemKind.Constant,
+      detail: `constant`,
+      documentation: `API language constant: ${constant}`,
+    });
+  }
+
+  // 添加内置类型补全
+  const builtinSymbols = getBuiltinSymbols();
+  for (const symbol of builtinSymbols) {
+    items.push({
+      label: symbol.name,
+      kind: CompletionItemKind.TypeParameter,
+      detail: symbol.detail,
+      documentation: symbol.documentation,
+    });
+  }
+
+  // 添加用户定义的符号补全
+  const userSymbols = globalSymbolTable.getAllSymbols();
+  for (const symbol of userSymbols) {
+    let kind: CompletionItemKind;
+    switch (symbol.kind) {
+      case SymbolKind.Struct:
+        kind = CompletionItemKind.Struct;
+        break;
+      case SymbolKind.Field:
+        kind = CompletionItemKind.Field;
+        break;
+      case SymbolKind.Enum:
+        kind = CompletionItemKind.Enum;
+        break;
+      case SymbolKind.EnumValue:
+        kind = CompletionItemKind.EnumMember;
+        break;
+      case SymbolKind.Api:
+        kind = CompletionItemKind.Function;
+        break;
+      default:
+        kind = CompletionItemKind.Text;
+    }
+
+    items.push({
+      label: symbol.name,
+      kind: kind,
+      detail: symbol.detail,
+      documentation: symbol.documentation,
+    });
+  }
+}
 
 // 补全项解析
 connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
@@ -463,6 +649,123 @@ connection.onHover((params): { contents: string } | null => {
 
   return null;
 });
+
+// 文档格式化
+connection.onDocumentFormatting(
+  async (params: DocumentFormattingParams): Promise<TextEdit[]> => {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) {
+      return [];
+    }
+
+    // 获取文档设置
+    const settings = await getDocumentSettings(document.uri);
+
+    // 检查格式化是否启用
+    if (!settings.format.enable) {
+      return [];
+    }
+
+    const text = document.getText();
+    const formattedText = formatApiDocument(text, settings.format);
+
+    return [
+      {
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: document.lineCount, character: 0 },
+        },
+        newText: formattedText,
+      },
+    ];
+  }
+);
+
+function formatApiDocument(
+  text: string,
+  formatSettings: { indentSize: number; alignFields: boolean }
+): string {
+  const lines = text.split("\n");
+  const formattedLines: string[] = [];
+  let indentLevel = 0;
+  const indentSize = formatSettings.indentSize; // 使用配置的缩进大小
+  let currentContext: string[] = []; // 跟踪当前上下文
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // 处理空行和注释
+    if (!line || line.startsWith("//")) {
+      formattedLines.push(line);
+      continue;
+    }
+
+    // 减少缩进的情况
+    if (line === "}") {
+      indentLevel = Math.max(0, indentLevel - 1);
+      currentContext.pop();
+    }
+
+    // 添加缩进
+    const indent = " ".repeat(indentLevel * indentSize);
+
+    // 特殊处理字段定义 - 进行对齐
+    if (
+      isFieldDefinition(line) &&
+      isInStructOrEnum(currentContext) &&
+      formatSettings.alignFields
+    ) {
+      const formattedField = formatFieldDefinition(line, indent);
+      formattedLines.push(formattedField);
+    } else {
+      formattedLines.push(indent + line);
+    }
+
+    // 增加缩进的情况
+    if (line.endsWith("{")) {
+      indentLevel++;
+      // 跟踪当前上下文
+      if (line.includes("struct")) {
+        currentContext.push("struct");
+      } else if (line.includes("enum")) {
+        currentContext.push("enum");
+      } else if (line.includes("apilist")) {
+        currentContext.push("apilist");
+      } else {
+        currentContext.push("block");
+      }
+    }
+  }
+
+  return formattedLines.join("\n");
+}
+
+function isFieldDefinition(line: string): boolean {
+  // 检查是否是字段定义
+  const fieldPattern = /^[a-zA-Z_][a-zA-Z0-9_]*\s+[a-zA-Z\[\]]+/;
+  return (
+    fieldPattern.test(line) && !line.includes("{") && !line.includes("typedef")
+  );
+}
+
+function isInStructOrEnum(context: string[]): boolean {
+  return (
+    context.length > 0 &&
+    (context[context.length - 1] === "struct" ||
+      context[context.length - 1] === "enum")
+  );
+}
+
+function formatFieldDefinition(line: string, indent: string): string {
+  // 简单的字段格式化：确保字段名和类型之间有适当的空格
+  const parts = line.split(/\s+/);
+  if (parts.length >= 2) {
+    const fieldName = parts[0];
+    const fieldType = parts.slice(1).join(" ");
+    return `${indent}${fieldName.padEnd(12)} ${fieldType}`;
+  }
+  return indent + line;
+}
 
 // 让文档管理器监听连接
 documents.listen(connection);

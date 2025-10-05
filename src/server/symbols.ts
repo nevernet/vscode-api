@@ -2,8 +2,10 @@ import {
   Program,
   TypedefStatement,
   StructDefinition,
+  InlineStructDefinition,
   FieldDefinition,
   ApiDefinition,
+  ApiListDefinition,
   EnumDefinition,
   EnumValue,
   TypeReference,
@@ -17,6 +19,7 @@ export enum SymbolKind {
   Struct = "struct",
   Field = "field",
   Api = "api",
+  ApiList = "apilist",
   Enum = "enum",
   EnumValue = "enumValue",
   Type = "type",
@@ -51,15 +54,41 @@ export class SymbolTable {
     // 检查重复定义
     if (this.symbols.has(key)) {
       const existing = this.symbols.get(key)!;
-      // 检查结构体重复定义
+      // 检查结构体重复定义（全局）
       if (symbol.kind === SymbolKind.Struct) {
         if (!this.duplicates.has(key)) {
           this.duplicates.set(key, [existing]);
         }
         this.duplicates.get(key)!.push(symbol);
       }
+      // 检查枚举重复定义（全局）
+      else if (symbol.kind === SymbolKind.Enum) {
+        if (!this.duplicates.has(key)) {
+          this.duplicates.set(key, [existing]);
+        }
+        this.duplicates.get(key)!.push(symbol);
+      }
+      // 检查API重复定义（在同一个ApiList中）
+      else if (symbol.kind === SymbolKind.Api) {
+        if (existing.parent === symbol.parent) {
+          if (!this.duplicates.has(key)) {
+            this.duplicates.set(key, [existing]);
+          }
+          this.duplicates.get(key)!.push(symbol);
+        }
+      }
+      // 检查ApiList重复定义（全局）
+      else if (symbol.kind === SymbolKind.ApiList) {
+        if (!this.duplicates.has(key)) {
+          this.duplicates.set(key, [existing]);
+        }
+        this.duplicates.get(key)!.push(symbol);
+      }
       // 检查字段重复定义（在同一个结构体或枚举中）
-      else if (symbol.kind === SymbolKind.Field || symbol.kind === SymbolKind.EnumValue) {
+      else if (
+        symbol.kind === SymbolKind.Field ||
+        symbol.kind === SymbolKind.EnumValue
+      ) {
         if (existing.parent === symbol.parent) {
           if (!this.duplicates.has(key)) {
             this.duplicates.set(key, [existing]);
@@ -76,7 +105,7 @@ export class SymbolTable {
       if (!this.structFields.has(symbol.parent)) {
         this.structFields.set(symbol.parent, new Map());
       }
-      
+
       // 检查在同一个结构体中的字段重复
       const structFields = this.structFields.get(symbol.parent)!;
       if (structFields.has(symbol.name)) {
@@ -87,7 +116,7 @@ export class SymbolTable {
         }
         this.duplicates.get(duplicateKey)!.push(symbol);
       }
-      
+
       structFields.set(symbol.name, symbol);
     }
   }
@@ -188,7 +217,8 @@ export class SymbolCollector implements ASTVisitor<void> {
                   },
                   end: {
                     line: fieldNode.line - 1,
-                    character: fieldNode.column - 1 + fieldNode.name.name.length,
+                    character:
+                      fieldNode.column - 1 + fieldNode.name.name.length,
                   },
                 },
               },
@@ -242,11 +272,14 @@ export class SymbolCollector implements ASTVisitor<void> {
                   },
                   end: {
                     line: enumValueNode.line - 1,
-                    character: enumValueNode.column - 1 + enumValueNode.name.name.length,
+                    character:
+                      enumValueNode.column - 1 + enumValueNode.name.name.length,
                   },
                 },
               },
-              detail: `${enumValueNode.name.name}${enumValueNode.value ? ` = ${enumValueNode.value.value}` : ''}`,
+              detail: `${enumValueNode.name.name}${
+                enumValueNode.value ? ` = ${enumValueNode.value.value}` : ""
+              }`,
               documentation: `Enum value ${enumValueNode.name.name}`,
               parent: node.name.name,
             };
@@ -281,6 +314,62 @@ export class SymbolCollector implements ASTVisitor<void> {
     // 收集API体内的符号
     for (const stmt of node.body) {
       walkAST(stmt, this);
+    }
+  }
+
+  visitApiListDefinition(node: ApiListDefinition): void {
+    const symbol: Symbol = {
+      name: node.name.value,
+      kind: SymbolKind.ApiList,
+      location: {
+        uri: this.currentUri,
+        range: {
+          start: { line: node.line - 1, character: node.column - 1 },
+          end: {
+            line: node.line - 1,
+            character: node.column - 1 + node.name.value.length,
+          },
+        },
+      },
+      detail: `apilist "${node.name.value}"`,
+      documentation: `API list definition for ${node.name.value}`,
+    };
+
+    this.symbolTable.addSymbol(symbol);
+
+    // 收集API列表中的API定义，设置父级
+    for (const api of node.apis) {
+      const apiSymbol: Symbol = {
+        name: api.uri.value,
+        kind: SymbolKind.Api,
+        location: {
+          uri: this.currentUri,
+          range: {
+            start: { line: api.line - 1, character: api.column - 1 },
+            end: {
+              line: api.line - 1,
+              character: api.column - 1 + api.uri.value.length,
+            },
+          },
+        },
+        detail: `api "${api.uri.value}"`,
+        documentation: `API definition for ${api.uri.value} in ${node.name.value}`,
+        parent: node.name.value, // 设置父级为ApiList名称
+      };
+
+      this.symbolTable.addSymbol(apiSymbol);
+
+      // 收集API体内的符号
+      for (const stmt of api.body) {
+        walkAST(stmt, this);
+      }
+    }
+  }
+
+  visitInlineStructDefinition(node: InlineStructDefinition): void {
+    // 内联结构体不需要符号，但需要收集其字段
+    for (const field of node.fields) {
+      walkAST(field, this);
     }
   }
 

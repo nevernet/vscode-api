@@ -5,8 +5,10 @@ import {
   Statement,
   TypedefStatement,
   StructDefinition,
+  InlineStructDefinition,
   FieldDefinition,
   ApiDefinition,
+  ApiListDefinition,
   InputStatement,
   OutputStatement,
   ExtractStatement,
@@ -79,6 +81,8 @@ export class ApiParser {
         return this.parseTypedefStatement();
       case TokenType.API:
         return this.parseApiDefinition();
+      case TokenType.APILIST:
+        return this.parseApiListDefinition();
       case TokenType.ENUM:
         return this.parseEnumDefinition();
       case TokenType.INCLUDE:
@@ -106,7 +110,10 @@ export class ApiParser {
     } else if (this.check(TokenType.ENUM)) {
       enumDef = this.parseInlineEnumDefinition();
     } else {
-      throw new ParseError("Expected 'struct' or 'enum' after 'typedef'", this.peek());
+      throw new ParseError(
+        "Expected 'struct' or 'enum' after 'typedef'",
+        this.peek()
+      );
     }
 
     const name = this.parseIdentifier();
@@ -158,20 +165,29 @@ export class ApiParser {
   private parseFieldDefinition(): FieldDefinition | null {
     const start = this.peek();
 
+    // 跳过空白字符和换行符
+    if (
+      start.type === TokenType.WHITESPACE ||
+      start.type === TokenType.NEWLINE
+    ) {
+      this.advance();
+      return null;
+    }
+
     // 尝试解析两种格式：
     // 1. "type name" (原格式): int id
     // 2. "name type" (新格式): id int
-    
+
     // 先保存当前位置
     const savedPosition = this.current;
-    
+
     try {
       // 尝试第一种格式：type name
       const firstToken = this.peek();
       if (this.checkType()) {
         const fieldType = this.parseTypeReference();
         const name = this.parseIdentifier();
-        
+
         // 可选的分号
         if (this.check(TokenType.SEMICOLON)) {
           this.advance();
@@ -196,10 +212,10 @@ export class ApiParser {
       // 尝试第二种格式：name type
       if (this.check(TokenType.IDENTIFIER)) {
         const name = this.parseIdentifier();
-        
+
         if (this.checkType()) {
           const fieldType = this.parseTypeReference();
-          
+
           // 可选的分号
           if (this.check(TokenType.SEMICOLON)) {
             this.advance();
@@ -219,6 +235,11 @@ export class ApiParser {
     } catch (error) {
       // 如果两种格式都失败，回到原位置
       this.current = savedPosition;
+    }
+
+    // 如果都失败了，确保前进至少一个token以避免死循环
+    if (this.current === savedPosition) {
+      this.advance();
     }
 
     return null;
@@ -259,6 +280,44 @@ export class ApiParser {
     };
   }
 
+  private parseApiListDefinition(): ApiListDefinition {
+    const start = this.peek();
+    this.consume(TokenType.APILIST, "Expected 'apilist'");
+
+    const name = this.parseStringLiteral();
+    this.consume(TokenType.LEFT_BRACE, "Expected '{'");
+
+    const apis: ApiDefinition[] = [];
+
+    while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
+      // 跳过注释
+      if (this.isComment(this.peek())) {
+        this.advance();
+        continue;
+      }
+
+      // 在 apilist 内部解析 api 定义
+      if (this.check(TokenType.API)) {
+        const api = this.parseApiDefinition();
+        apis.push(api);
+      } else {
+        this.advance(); // 跳过未识别的tokens
+      }
+    }
+
+    const end = this.consume(TokenType.RIGHT_BRACE, "Expected '}'");
+
+    return {
+      type: "ApiListDefinition",
+      name,
+      apis,
+      start: start.start,
+      end: end.end,
+      line: start.line,
+      column: start.column,
+    };
+  }
+
   private parseApiBodyStatement(): ApiBodyStatement | null {
     const token = this.peek();
 
@@ -279,7 +338,15 @@ export class ApiParser {
     const start = this.peek();
     this.consume(TokenType.INPUT, "Expected 'input'");
 
-    const structRef = this.parseTypeReference();
+    let structRef: TypeReference | InlineStructDefinition;
+
+    if (this.check(TokenType.STRUCT)) {
+      // 解析内联结构体: input struct { ... }
+      structRef = this.parseInlineStructDefinition();
+    } else {
+      // 解析类型引用: input SomeStructType
+      structRef = this.parseTypeReference();
+    }
 
     return {
       type: "InputStatement",
@@ -295,13 +362,53 @@ export class ApiParser {
     const start = this.peek();
     this.consume(TokenType.OUTPUT, "Expected 'output'");
 
-    const structRef = this.parseTypeReference();
+    let structRef: TypeReference | InlineStructDefinition;
+
+    if (this.check(TokenType.STRUCT)) {
+      // 解析内联结构体: output struct { ... }
+      structRef = this.parseInlineStructDefinition();
+    } else {
+      // 解析类型引用: output SomeStructType
+      structRef = this.parseTypeReference();
+    }
 
     return {
       type: "OutputStatement",
       structRef,
       start: start.start,
       end: structRef.end,
+      line: start.line,
+      column: start.column,
+    };
+  }
+
+  private parseInlineStructDefinition(): InlineStructDefinition {
+    const start = this.peek();
+    this.consume(TokenType.STRUCT, "Expected 'struct'");
+    this.consume(TokenType.LEFT_BRACE, "Expected '{'");
+
+    const fields: FieldDefinition[] = [];
+
+    while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
+      // 跳过注释
+      if (this.isComment(this.peek())) {
+        this.advance();
+        continue;
+      }
+
+      const field = this.parseFieldDefinition();
+      if (field) {
+        fields.push(field);
+      }
+    }
+
+    const end = this.consume(TokenType.RIGHT_BRACE, "Expected '}'");
+
+    return {
+      type: "InlineStructDefinition",
+      fields,
+      start: start.start,
+      end: end.end,
       line: start.line,
       column: start.column,
     };

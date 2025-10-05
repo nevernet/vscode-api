@@ -45,19 +45,32 @@ export interface ApiDefinition extends Statement {
   body: ApiBodyStatement[];
 }
 
+// API列表定义
+export interface ApiListDefinition extends Statement {
+  type: "ApiListDefinition";
+  name: StringLiteral;
+  apis: ApiDefinition[];
+}
+
+// 内联结构体定义
+export interface InlineStructDefinition extends ASTNode {
+  type: "InlineStructDefinition";
+  fields: FieldDefinition[];
+}
+
 // API体语句
 export interface ApiBodyStatement extends ASTNode {}
 
 // Input语句
 export interface InputStatement extends ApiBodyStatement {
   type: "InputStatement";
-  structRef: TypeReference;
+  structRef: TypeReference | InlineStructDefinition;
 }
 
 // Output语句
 export interface OutputStatement extends ApiBodyStatement {
   type: "OutputStatement";
-  structRef: TypeReference;
+  structRef: TypeReference | InlineStructDefinition;
 }
 
 // Extract语句
@@ -130,8 +143,10 @@ export interface ASTVisitor<T = void> {
   visitProgram?(node: Program): T;
   visitTypedefStatement?(node: TypedefStatement): T;
   visitStructDefinition?(node: StructDefinition): T;
+  visitInlineStructDefinition?(node: InlineStructDefinition): T;
   visitFieldDefinition?(node: FieldDefinition): T;
   visitApiDefinition?(node: ApiDefinition): T;
+  visitApiListDefinition?(node: ApiListDefinition): T;
   visitInputStatement?(node: InputStatement): T;
   visitOutputStatement?(node: OutputStatement): T;
   visitExtractStatement?(node: ExtractStatement): T;
