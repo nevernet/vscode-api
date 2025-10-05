@@ -175,7 +175,7 @@ documents.onDidChangeContent((change) => {
   setTimeout(() => {
     indexDocument(change.document);
   }, 100); // 延迟100ms，避免频繁的输入导致性能问题
-  
+
   validateTextDocument(change.document);
 });
 
@@ -283,7 +283,10 @@ connection.onCompletion(
       const position = textDocumentPosition.position;
       const lines = text.split("\n");
       const currentLine = lines[position.line] || "";
-      const currentLineToPosition = currentLine.substring(0, position.character);
+      const currentLineToPosition = currentLine.substring(
+        0,
+        position.character
+      );
 
       // 分析当前上下文（使用优化后的版本）
       const context = analyzeCompletionContext(
@@ -332,11 +335,10 @@ function indexDocument(document: TextDocument) {
     const lexer = new ApiLexer(text);
     const parser = new ApiParser(lexer);
     const ast = parser.parse(text);
-    
+
     // 收集符号
     const collector = new SymbolCollector(globalSymbolTable, document.uri);
     collector.collect(ast);
-    
   } catch (error) {
     // 解析错误不影响自动完成功能
     console.warn("Document indexing failed:", (error as Error).message);
@@ -359,7 +361,7 @@ function analyzeCompletionContext(
   // 优化：只检查当前行附近的上下文，避免遍历整个文档
   const startLine = Math.max(0, position.line - 20); // 只检查前20行
   const endLine = Math.min(lines.length - 1, position.line + 5); // 只检查后5行
-  
+
   let braceLevel = 0;
   let inApiDefinition = false;
   let inApiListDefinition = false;
@@ -368,7 +370,7 @@ function analyzeCompletionContext(
   // 从起始行开始分析上下文
   for (let i = startLine; i <= endLine; i++) {
     const lineText = lines[i];
-    
+
     // 检查API定义开始
     if (lineText.includes("api ") && lineText.includes("{")) {
       inApiDefinition = true;
@@ -711,9 +713,10 @@ connection.onDocumentFormatting(
       }
 
       const text = document.getText();
-      
+
       // 性能保护：限制文档大小
-      if (text.length > 100000) { // 100KB限制
+      if (text.length > 100000) {
+        // 100KB限制
         console.warn("Document too large for formatting:", text.length);
         return [];
       }
