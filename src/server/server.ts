@@ -1925,11 +1925,25 @@ connection.onDocumentFormatting(
       // 性能保护：限制文档大小
       if (text.length > 100000) {
         // 100KB限制
-        console.warn("Document too large for formatting:", text.length);
+        console.warn("[FORMAT] 文档过大，无法格式化:", text.length);
         return [];
       }
 
-      const formattedText = formatApiDocument(text, settings.format);
+      // 性能保护：限制行数
+      const lineCount = document.lineCount;
+      if (lineCount > 10000) {
+        // 10000行限制
+        console.warn("[FORMAT] 文档行数过多，无法格式化:", lineCount);
+        return [];
+      }
+
+      // 添加格式化超时保护 - 3秒超时
+      const formattedText = await Promise.race([
+        Promise.resolve(formatApiDocument(text, settings.format)),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error("格式化超时")), 3000)
+        ),
+      ]);
 
       return [
         {
@@ -1941,7 +1955,12 @@ connection.onDocumentFormatting(
         },
       ];
     } catch (error) {
-      console.error("Formatting error:", error);
+      const errorMsg = (error as Error).message;
+      if (errorMsg.includes("格式化超时")) {
+        console.error("[FORMAT] 格式化超时，文档过于复杂");
+      } else {
+        console.error("[FORMAT] 格式化错误:", error);
+      }
       // 确保即使出错也返回空数组，而不是未定义的值
       return [];
     }
@@ -1955,12 +1974,12 @@ function formatApiDocument(
   try {
     // 输入验证
     if (!text || typeof text !== "string") {
-      console.warn("Invalid text input for formatting");
+      console.warn("[FORMAT] 无效的文本输入");
       return text || "";
     }
 
     if (!formatSettings || typeof formatSettings.indentSize !== "number") {
-      console.warn("Invalid format settings");
+      console.warn("[FORMAT] 无效的格式化设置");
       return text;
     }
 
@@ -1970,7 +1989,17 @@ function formatApiDocument(
     const indentSize = Math.max(0, formatSettings.indentSize); // 确保缩进大小不为负数
     let currentContext: string[] = []; // 跟踪当前上下文
 
+    // 性能保护：添加迭代次数限制
+    const MAX_ITERATIONS = 50000; // 最大处理50000行
+    let iterations = 0;
+
     for (let i = 0; i < lines.length; i++) {
+      // 检查迭代次数
+      if (++iterations > MAX_ITERATIONS) {
+        console.error("[FORMAT] 超过最大迭代次数，可能文档过大或存在问题");
+        throw new Error("格式化操作超过最大迭代次数");
+      }
+
       const line = lines[i].trim();
 
       // 处理空行
