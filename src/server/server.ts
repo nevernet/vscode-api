@@ -673,23 +673,38 @@ function formatApiDocument(
       currentContext.pop();
     }
 
-    // 计算缩进 - 但顶层声明（typedef, struct, api 等）不应该缩进
+    // 计算缩进 - 顶层声明通常不缩进，但要考虑上下文
     let indent = "";
     const isTopLevelDeclaration =
       line.startsWith("typedef") ||
       line.startsWith("struct ") ||
-      line.startsWith("api ") ||
-      line.startsWith("apilist ") ||
       line.startsWith("enum ");
 
-    if (!isTopLevelDeclaration && !isStructEndWithName) {
+    // api 和 apilist 的特殊处理：如果在 apilist 内部，api 应该缩进
+    const isApiDeclaration = line.startsWith("api ");
+    const isApiListDeclaration = line.startsWith("apilist ");
+    const isInApiList =
+      currentContext.length > 0 &&
+      currentContext[currentContext.length - 1] === "apilist";
+
+    // 判断是否应该缩进：
+    // 1. 不是顶层声明的普通行应该缩进
+    // 2. 在 apilist 内部的 api 声明应该缩进
+    // 3. 结构体结束行不缩进
+    const shouldIndent =
+      (!isTopLevelDeclaration &&
+        !isApiListDeclaration &&
+        !isStructEndWithName) ||
+      (isApiDeclaration && isInApiList);
+
+    if (shouldIndent) {
       indent = " ".repeat(indentLevel * indentSize);
     }
 
-    // 特殊处理字段定义 - 进行对齐
+    // 特殊处理字段定义 - 仅在 typedef struct 内进行对齐
     if (
       isFieldDefinition(line) &&
-      isInStructOrEnum(currentContext) &&
+      isInTypedefStruct(currentContext) &&
       formatSettings.alignFields
     ) {
       const formattedField = formatFieldDefinition(line, indent);
@@ -701,11 +716,22 @@ function formatApiDocument(
     // 增加缩进的情况
     if (line.endsWith("{")) {
       indentLevel++;
-      // 跟踪当前上下文
+      // 跟踪当前上下文 - 区分 typedef struct 和 inline struct
       if (line.includes("struct")) {
-        currentContext.push("struct");
+        // 检查是否是 typedef struct（需要字段对齐）
+        if (line.startsWith("typedef struct")) {
+          currentContext.push("typedef-struct");
+        } else {
+          // inline struct（如 input struct, output struct 等，不需要字段对齐）
+          currentContext.push("inline-struct");
+        }
       } else if (line.includes("enum")) {
-        currentContext.push("enum");
+        // 检查是否是 typedef enum
+        if (line.startsWith("typedef enum")) {
+          currentContext.push("typedef-enum");
+        } else {
+          currentContext.push("inline-enum");
+        }
       } else if (line.includes("apilist")) {
         currentContext.push("apilist");
       } else {
@@ -729,8 +755,16 @@ function isInStructOrEnum(context: string[]): boolean {
   return (
     context.length > 0 &&
     (context[context.length - 1] === "struct" ||
-      context[context.length - 1] === "enum")
+      context[context.length - 1] === "enum" ||
+      context[context.length - 1] === "typedef-struct" ||
+      context[context.length - 1] === "typedef-enum" ||
+      context[context.length - 1] === "inline-struct" ||
+      context[context.length - 1] === "inline-enum")
   );
+}
+
+function isInTypedefStruct(context: string[]): boolean {
+  return context.length > 0 && context[context.length - 1] === "typedef-struct";
 }
 
 function formatFieldDefinition(line: string, indent: string): string {

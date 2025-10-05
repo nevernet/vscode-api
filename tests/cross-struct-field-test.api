@@ -1,0 +1,28 @@
+// 测试跨结构体字段名不会冲突
+
+typedef struct {
+  id           int
+  name         string [[类型名称]]
+  code         string [[基于ssId， 5位顺序码递增]]
+} CustomerCategoryParentInfo
+
+typedef struct {
+  id           int
+  code         string [[基于ssId， 5位顺序码递增]]
+  name         string [[类型名称]]
+} CustomerAreaCategoryListData
+
+// 另一个测试结构体
+typedef struct {
+  id           int
+  name         string
+  description  string
+  name         int    // 这里应该报错：同一结构体内重复字段
+} TestStruct
+
+typedef enum {
+  ACTIVE
+  INACTIVE
+  PENDING
+  ACTIVE               // 这里应该报错：同一枚举内重复值
+} Status

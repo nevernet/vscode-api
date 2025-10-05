@@ -1,0 +1,61 @@
+// 测试重复定义检查仅在 typedef struct 和 typedef enum 中生效
+
+// 这里应该检查字段重复定义（typedef struct）
+typedef struct {
+  id int
+  name string
+  id string      // 应该报错：重复字段
+} User
+
+// 这里应该检查枚举值重复定义（typedef enum）
+typedef enum {
+  ACTIVE
+  INACTIVE
+  ACTIVE         // 应该报错：重复枚举值
+} Status
+
+// 下面的都不应该检查重复定义（inline struct/enum）
+
+apilist "test" {
+  api "create" {
+    input struct {
+      id int
+      name string
+      id string    // 不应该报错：inline struct 不检查重复
+    }
+    output struct {
+      success bool
+      message string
+      success int  // 不应该报错：inline struct 不检查重复
+    }
+  }
+}
+
+api "standalone" {
+  input struct {
+    user_id int
+    email string
+    user_id string   // 不应该报错：inline struct 不检查重复
+  }
+  output struct {
+    result bool
+    data string
+    result string    // 不应该报错：inline struct 不检查重复
+  }
+}
+
+// 即使有嵌套的 inline struct 也不应该检查
+api "nested" {
+  input struct {
+    user struct {
+      id int
+      name string
+      id string      // 不应该报错：inline struct 不检查重复
+    }
+    settings struct {
+      theme string
+      language string
+      theme int      // 不应该报错：inline struct 不检查重复
+    }
+  }
+}

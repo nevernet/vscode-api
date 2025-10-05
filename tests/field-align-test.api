@@ -1,0 +1,60 @@
+// 测试字段对齐仅在 typedef struct 内生效
+
+// 这里的字段应该对齐（typedef struct）
+typedef struct {
+  id           int
+  name         string
+  email        string
+  active       bool
+} User
+
+// 这里的字段应该对齐（typedef enum）
+typedef enum {
+  ACTIVE
+  INACTIVE
+  PENDING
+} Status
+
+// 下面的字段都不应该对齐（inline struct）
+
+apilist "user" {
+  api "create" {
+    input struct {
+      id int
+      name string
+      email string
+      active bool
+    }
+    output struct {
+      success bool
+      message string
+      user_id int
+    }
+  }
+  
+  api "update" {
+    input struct {
+      user_id int
+      name string
+      email string
+    }
+    output struct {
+      success bool
+      updated_fields int
+    }
+  }
+}
+
+// 独立 API 中的 inline struct 也不应该对齐
+api "standalone" {
+  input struct {
+    search_term string
+    limit int
+    offset int
+  }
+  output struct {
+    results User[]
+    total_count int
+    has_more bool
+  }
+}

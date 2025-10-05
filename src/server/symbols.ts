@@ -133,6 +133,7 @@ export class SymbolTable {
 export class SymbolCollector implements ASTVisitor<void> {
   private symbolTable: SymbolTable;
   private currentUri: string;
+  private typedefContext: string | null = null; // 跟踪当前是否在 typedef 上下文中
 
   constructor(symbolTable: SymbolTable, uri: string) {
     this.symbolTable = symbolTable;
@@ -151,6 +152,9 @@ export class SymbolCollector implements ASTVisitor<void> {
 
   visitTypedefStatement(node: TypedefStatement): void {
     if (node.structDef) {
+      // 设置 typedef struct 上下文
+      this.typedefContext = node.name.name;
+
       // 处理结构体定义
       const symbol: Symbol = {
         name: node.name.name,
@@ -171,41 +175,15 @@ export class SymbolCollector implements ASTVisitor<void> {
 
       this.symbolTable.addSymbol(symbol);
 
-      // 收集结构体字段
+      // 收集结构体字段 - walkAST 会自动调用 visitFieldDefinition
       walkAST(node.structDef, this);
 
-      // 为字段设置父结构体
-      for (const field of node.structDef.fields) {
-        walkAST(field, {
-          visitFieldDefinition: (fieldNode: FieldDefinition) => {
-            const fieldSymbol: Symbol = {
-              name: fieldNode.name.name,
-              kind: SymbolKind.Field,
-              location: {
-                uri: this.currentUri,
-                range: {
-                  start: {
-                    line: fieldNode.line - 1,
-                    character: fieldNode.column - 1,
-                  },
-                  end: {
-                    line: fieldNode.line - 1,
-                    character:
-                      fieldNode.column - 1 + fieldNode.name.name.length,
-                  },
-                },
-              },
-              detail: `${fieldNode.fieldType.name} ${fieldNode.name.name}`,
-              documentation: `Field ${fieldNode.name.name} of type ${fieldNode.fieldType.name}`,
-              parent: node.name.name,
-              type: fieldNode.fieldType.name,
-            };
-
-            this.symbolTable.addSymbol(fieldSymbol);
-          },
-        });
-      }
+      // 清除 typedef 上下文
+      this.typedefContext = null;
     } else if (node.enumDef) {
+      // 设置 typedef enum 上下文
+      this.typedefContext = node.name.name;
+
       // 处理枚举定义
       const symbol: Symbol = {
         name: node.name.name,
@@ -226,41 +204,11 @@ export class SymbolCollector implements ASTVisitor<void> {
 
       this.symbolTable.addSymbol(symbol);
 
-      // 收集枚举值
+      // 收集枚举值 - walkAST 会自动调用 visitEnumValue
       walkAST(node.enumDef, this);
 
-      // 为枚举值设置父枚举
-      for (const enumValue of node.enumDef.values) {
-        walkAST(enumValue, {
-          visitEnumValue: (enumValueNode: EnumValue) => {
-            const enumValueSymbol: Symbol = {
-              name: enumValueNode.name.name,
-              kind: SymbolKind.EnumValue,
-              location: {
-                uri: this.currentUri,
-                range: {
-                  start: {
-                    line: enumValueNode.line - 1,
-                    character: enumValueNode.column - 1,
-                  },
-                  end: {
-                    line: enumValueNode.line - 1,
-                    character:
-                      enumValueNode.column - 1 + enumValueNode.name.name.length,
-                  },
-                },
-              },
-              detail: `${enumValueNode.name.name}${
-                enumValueNode.value ? ` = ${enumValueNode.value.value}` : ""
-              }`,
-              documentation: `Enum value ${enumValueNode.name.name}`,
-              parent: node.name.name,
-            };
-
-            this.symbolTable.addSymbol(enumValueSymbol);
-          },
-        });
-      }
+      // 清除 typedef 上下文
+      this.typedefContext = null;
     }
   }
 
@@ -346,6 +294,36 @@ export class SymbolCollector implements ASTVisitor<void> {
     }
   }
 
+  visitFieldDefinition(node: FieldDefinition): void {
+    // 仅在 typedef struct 上下文中创建字段符号进行重复定义检查
+    if (this.typedefContext) {
+      const fieldSymbol: Symbol = {
+        name: node.name.name,
+        kind: SymbolKind.Field,
+        location: {
+          uri: this.currentUri,
+          range: {
+            start: {
+              line: node.line - 1,
+              character: node.column - 1,
+            },
+            end: {
+              line: node.line - 1,
+              character: node.column - 1 + node.name.name.length,
+            },
+          },
+        },
+        detail: `${node.fieldType.name} ${node.name.name}`,
+        documentation: `Field ${node.name.name} of type ${node.fieldType.name}`,
+        parent: this.typedefContext,
+        type: node.fieldType.name,
+      };
+
+      this.symbolTable.addSymbol(fieldSymbol);
+    }
+    // 如果不在 typedef 上下文中，不创建符号，也就不会进行重复定义检查
+  }
+
   visitEnumDefinition(node: EnumDefinition): void {
     const symbol: Symbol = {
       name: node.name.name,
@@ -373,25 +351,30 @@ export class SymbolCollector implements ASTVisitor<void> {
   }
 
   visitEnumValue(node: EnumValue): void {
-    const symbol: Symbol = {
-      name: node.name.name,
-      kind: SymbolKind.EnumValue,
-      location: {
-        uri: this.currentUri,
-        range: {
-          start: { line: node.line - 1, character: node.column - 1 },
-          end: {
-            line: node.line - 1,
-            character: node.column - 1 + node.name.name.length,
+    // 仅在 typedef enum 上下文中创建枚举值符号进行重复定义检查
+    if (this.typedefContext) {
+      const symbol: Symbol = {
+        name: node.name.name,
+        kind: SymbolKind.EnumValue,
+        location: {
+          uri: this.currentUri,
+          range: {
+            start: { line: node.line - 1, character: node.column - 1 },
+            end: {
+              line: node.line - 1,
+              character: node.column - 1 + node.name.name.length,
+            },
           },
         },
-      },
-      detail: `enum value ${node.name.name}`,
-      documentation: `Enum value ${node.name.name}`,
-      type: node.value ? node.value.value.toString() : undefined,
-    };
+        detail: `enum value ${node.name.name}`,
+        documentation: `Enum value ${node.name.name}`,
+        parent: this.typedefContext,
+        type: node.value ? node.value.value.toString() : undefined,
+      };
 
-    this.symbolTable.addSymbol(symbol);
+      this.symbolTable.addSymbol(symbol);
+    }
+    // 如果不在 typedef 上下文中，不创建符号，也就不会进行重复定义检查
   }
 }
 
