@@ -1,0 +1,69 @@
+// 测试文件 - 验证所有新功能
+
+// 1. 测试 typedef enum {} 语法（空枚举）
+typedef enum {} EmptyStatus
+
+// 2. 测试 typedef enum {} 语法（带值枚举）
+typedef enum {
+    ACTIVE = 1,
+    INACTIVE = 2
+} UserStatus
+
+// 3. 测试新的字段定义语法：id int 格式
+typedef struct {
+    id number          // 新语法：字段名 类型
+    name string        // 新语法：字段名 类型
+    age number         // 新语法：字段名 类型
+    isActive boolean   // 新语法：字段名 类型
+} UserNew
+
+// 4. 测试传统的字段定义语法：int id 格式
+typedef struct {
+    number id          // 传统语法：类型 字段名
+    string name        // 传统语法：类型 字段名
+    boolean isActive   // 传统语法：类型 字段名
+} UserTraditional
+
+// 5. 测试字段重复检查 - 这应该报错
+typedef struct {
+    id number
+    name string
+    id string          // 重复字段 - 应该报错
+    email string
+    name boolean       // 重复字段 - 应该报错
+} DuplicateFieldsStruct
+
+// 6. 测试枚举值重复检查 - 这应该报错
+typedef enum {
+    PENDING = 1,
+    ACTIVE = 2,
+    PENDING = 3,       // 重复枚举值 - 应该报错
+    INACTIVE = 4
+} DuplicateValuesEnum
+
+// 7. 测试结构体重复定义 - 这应该报错
+typedef struct {
+    id number
+} Product
+
+typedef struct {       // 重复结构体定义 - 应该报错
+    name string
+} Product
+
+// 8. 测试 API 定义中使用新类型
+api "user/create" {
+    input UserNew
+    output UserTraditional
+    extract id, name
+}
+
+// 9. 测试注释支持
+/*
+ * 多行注释测试
+ * 所有新功能都在这里测试
+ */
+typedef struct {
+    // 单行注释
+    userId number      // 行尾注释
+    userName string    
+} CommentedStruct

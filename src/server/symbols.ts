@@ -49,12 +49,24 @@ export class SymbolTable {
     const key = symbol.parent ? `${symbol.parent}.${symbol.name}` : symbol.name;
 
     // 检查重复定义
-    if (this.symbols.has(key) && symbol.kind === SymbolKind.Struct) {
+    if (this.symbols.has(key)) {
       const existing = this.symbols.get(key)!;
-      if (!this.duplicates.has(key)) {
-        this.duplicates.set(key, [existing]);
+      // 检查结构体重复定义
+      if (symbol.kind === SymbolKind.Struct) {
+        if (!this.duplicates.has(key)) {
+          this.duplicates.set(key, [existing]);
+        }
+        this.duplicates.get(key)!.push(symbol);
       }
-      this.duplicates.get(key)!.push(symbol);
+      // 检查字段重复定义（在同一个结构体或枚举中）
+      else if (symbol.kind === SymbolKind.Field || symbol.kind === SymbolKind.EnumValue) {
+        if (existing.parent === symbol.parent) {
+          if (!this.duplicates.has(key)) {
+            this.duplicates.set(key, [existing]);
+          }
+          this.duplicates.get(key)!.push(symbol);
+        }
+      }
     }
 
     this.symbols.set(key, symbol);
@@ -64,7 +76,19 @@ export class SymbolTable {
       if (!this.structFields.has(symbol.parent)) {
         this.structFields.set(symbol.parent, new Map());
       }
-      this.structFields.get(symbol.parent)!.set(symbol.name, symbol);
+      
+      // 检查在同一个结构体中的字段重复
+      const structFields = this.structFields.get(symbol.parent)!;
+      if (structFields.has(symbol.name)) {
+        const duplicateKey = `${symbol.parent}.${symbol.name}`;
+        const existing = structFields.get(symbol.name)!;
+        if (!this.duplicates.has(duplicateKey)) {
+          this.duplicates.set(duplicateKey, [existing]);
+        }
+        this.duplicates.get(duplicateKey)!.push(symbol);
+      }
+      
+      structFields.set(symbol.name, symbol);
     }
   }
 
@@ -124,58 +148,113 @@ export class SymbolCollector implements ASTVisitor<void> {
   }
 
   visitTypedefStatement(node: TypedefStatement): void {
-    // 添加结构体符号
-    const symbol: Symbol = {
-      name: node.name.name,
-      kind: SymbolKind.Struct,
-      location: {
-        uri: this.currentUri,
-        range: {
-          start: { line: node.line - 1, character: node.column - 1 },
-          end: {
-            line: node.line - 1,
-            character: node.column - 1 + node.name.name.length,
+    if (node.structDef) {
+      // 处理结构体定义
+      const symbol: Symbol = {
+        name: node.name.name,
+        kind: SymbolKind.Struct,
+        location: {
+          uri: this.currentUri,
+          range: {
+            start: { line: node.line - 1, character: node.column - 1 },
+            end: {
+              line: node.line - 1,
+              character: node.column - 1 + node.name.name.length,
+            },
           },
         },
-      },
-      detail: `struct ${node.name.name}`,
-      documentation: `Struct definition for ${node.name.name}`,
-    };
+        detail: `struct ${node.name.name}`,
+        documentation: `Struct definition for ${node.name.name}`,
+      };
 
-    this.symbolTable.addSymbol(symbol);
+      this.symbolTable.addSymbol(symbol);
 
-    // 收集结构体字段
-    walkAST(node.structDef, this);
+      // 收集结构体字段
+      walkAST(node.structDef, this);
 
-    // 为字段设置父结构体
-    for (const field of node.structDef.fields) {
-      walkAST(field, {
-        visitFieldDefinition: (fieldNode: FieldDefinition) => {
-          const fieldSymbol: Symbol = {
-            name: fieldNode.name.name,
-            kind: SymbolKind.Field,
-            location: {
-              uri: this.currentUri,
-              range: {
-                start: {
-                  line: fieldNode.line - 1,
-                  character: fieldNode.column - 1,
-                },
-                end: {
-                  line: fieldNode.line - 1,
-                  character: fieldNode.column - 1 + fieldNode.name.name.length,
+      // 为字段设置父结构体
+      for (const field of node.structDef.fields) {
+        walkAST(field, {
+          visitFieldDefinition: (fieldNode: FieldDefinition) => {
+            const fieldSymbol: Symbol = {
+              name: fieldNode.name.name,
+              kind: SymbolKind.Field,
+              location: {
+                uri: this.currentUri,
+                range: {
+                  start: {
+                    line: fieldNode.line - 1,
+                    character: fieldNode.column - 1,
+                  },
+                  end: {
+                    line: fieldNode.line - 1,
+                    character: fieldNode.column - 1 + fieldNode.name.name.length,
+                  },
                 },
               },
-            },
-            detail: `${fieldNode.fieldType.name} ${fieldNode.name.name}`,
-            documentation: `Field ${fieldNode.name.name} of type ${fieldNode.fieldType.name}`,
-            parent: node.name.name,
-            type: fieldNode.fieldType.name,
-          };
+              detail: `${fieldNode.fieldType.name} ${fieldNode.name.name}`,
+              documentation: `Field ${fieldNode.name.name} of type ${fieldNode.fieldType.name}`,
+              parent: node.name.name,
+              type: fieldNode.fieldType.name,
+            };
 
-          this.symbolTable.addSymbol(fieldSymbol);
+            this.symbolTable.addSymbol(fieldSymbol);
+          },
+        });
+      }
+    } else if (node.enumDef) {
+      // 处理枚举定义
+      const symbol: Symbol = {
+        name: node.name.name,
+        kind: SymbolKind.Enum,
+        location: {
+          uri: this.currentUri,
+          range: {
+            start: { line: node.line - 1, character: node.column - 1 },
+            end: {
+              line: node.line - 1,
+              character: node.column - 1 + node.name.name.length,
+            },
+          },
         },
-      });
+        detail: `enum ${node.name.name}`,
+        documentation: `Enum definition for ${node.name.name}`,
+      };
+
+      this.symbolTable.addSymbol(symbol);
+
+      // 收集枚举值
+      walkAST(node.enumDef, this);
+
+      // 为枚举值设置父枚举
+      for (const enumValue of node.enumDef.values) {
+        walkAST(enumValue, {
+          visitEnumValue: (enumValueNode: EnumValue) => {
+            const enumValueSymbol: Symbol = {
+              name: enumValueNode.name.name,
+              kind: SymbolKind.EnumValue,
+              location: {
+                uri: this.currentUri,
+                range: {
+                  start: {
+                    line: enumValueNode.line - 1,
+                    character: enumValueNode.column - 1,
+                  },
+                  end: {
+                    line: enumValueNode.line - 1,
+                    character: enumValueNode.column - 1 + enumValueNode.name.name.length,
+                  },
+                },
+              },
+              detail: `${enumValueNode.name.name}${enumValueNode.value ? ` = ${enumValueNode.value.value}` : ''}`,
+              documentation: `Enum value ${enumValueNode.name.name}`,
+              parent: node.name.name,
+            };
+
+            this.symbolTable.addSymbol(enumValueSymbol);
+          },
+        });
+      }
     }
   }
 

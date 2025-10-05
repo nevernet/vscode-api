@@ -24,6 +24,8 @@ export enum TokenType {
   FLOAT = "float",
   DOUBLE = "double",
   STRING = "string",
+  NUMBER_TYPE = "number",
+  BOOLEAN_TYPE = "boolean",
 
   // 常量
   GET = "GET",
@@ -94,6 +96,8 @@ export class ApiLexer {
     ["float", TokenType.FLOAT],
     ["double", TokenType.DOUBLE],
     ["string", TokenType.STRING],
+    ["number", TokenType.NUMBER_TYPE],
+    ["boolean", TokenType.BOOLEAN_TYPE],
     ["GET", TokenType.GET],
     ["SET", TokenType.SET_CONST],
   ]);

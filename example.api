@@ -1,43 +1,67 @@
-// API示例文件
+// API示例文件 - 展示所有支持的语法
 
+// 1. 传统语法：类型 字段名
 typedef struct {
     int id;
     string name;
     float price;
     bool available;
-} Product
+} ProductTraditional
 
+// 2. 新语法：字段名 类型（更自然的语法）
 typedef struct {
-    int userId;
-    string username;
-    string email;
-} User
+    userId number      // 用户ID
+    userName string    // 用户名
+    email string       // 邮箱地址
+    isActive boolean   // 是否激活
+} UserModern
 
-typedef struct {
-    int orderId;
-    User customer;
-    double totalAmount;
-} Order
+// 3. typedef enum {} 语法支持
+typedef enum {} EmptyStatus
 
-api "product/list" {
-    input User
-    output Product
-    extract id, name, price
-}
-
-api "order/create" {
-    input Order
-    output Order
-}
-
-enum Status {
+typedef enum {
     PENDING = 1,
     CONFIRMED = 2,
     SHIPPED = 3,
     DELIVERED = 4
+} OrderStatus
+
+// 4. 混合使用两种语法
+typedef struct {
+    number orderId     // 传统语法
+    customerId number  // 新语法  
+    string status      // 传统语法
+    totalAmount number // 新语法
+    createdAt string   // 新语法
+} OrderMixed
+
+// 5. API 定义
+api "product/list" {
+    input UserModern
+    output ProductTraditional
+    extract id, name, price
 }
 
-// 测试重复定义（这会触发错误）
+api "order/create" {
+    input OrderMixed
+    output OrderMixed
+}
+
+// 6. 注释支持
+/*
+ * 多行注释
+ * 描述复杂的数据结构
+ */
 typedef struct {
-    string description;
-} Product
+    // 单行注释
+    profileId number   // 行尾注释
+    bio string         
+    avatar string      // 头像URL
+} UserProfile
+
+// 7. 错误示例：重复字段（会被检测为错误）
+// typedef struct {
+//     id number
+//     name string
+//     id string          // 错误：重复字段
+// } ErrorStruct

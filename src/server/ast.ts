@@ -19,7 +19,8 @@ export interface Statement extends ASTNode {}
 // Typedef语句
 export interface TypedefStatement extends Statement {
   type: "TypedefStatement";
-  structDef: StructDefinition;
+  structDef?: StructDefinition;
+  enumDef?: EnumDefinition;
   name: Identifier;
 }
 

@@ -98,12 +98,23 @@ export class ApiParser {
     const start = this.peek();
     this.consume(TokenType.TYPEDEF, "Expected 'typedef'");
 
-    const structDef = this.parseStructDefinition();
+    let structDef: StructDefinition | undefined;
+    let enumDef: EnumDefinition | undefined;
+
+    if (this.check(TokenType.STRUCT)) {
+      structDef = this.parseStructDefinition();
+    } else if (this.check(TokenType.ENUM)) {
+      enumDef = this.parseInlineEnumDefinition();
+    } else {
+      throw new ParseError("Expected 'struct' or 'enum' after 'typedef'", this.peek());
+    }
+
     const name = this.parseIdentifier();
 
     return {
       type: "TypedefStatement",
       structDef,
+      enumDef,
       name,
       start: start.start,
       end: name.end,
@@ -147,29 +158,70 @@ export class ApiParser {
   private parseFieldDefinition(): FieldDefinition | null {
     const start = this.peek();
 
-    // 解析类型
-    const fieldType = this.parseTypeReference();
-    if (!fieldType) {
-      return null;
+    // 尝试解析两种格式：
+    // 1. "type name" (原格式): int id
+    // 2. "name type" (新格式): id int
+    
+    // 先保存当前位置
+    const savedPosition = this.current;
+    
+    try {
+      // 尝试第一种格式：type name
+      const firstToken = this.peek();
+      if (this.checkType()) {
+        const fieldType = this.parseTypeReference();
+        const name = this.parseIdentifier();
+        
+        // 可选的分号
+        if (this.check(TokenType.SEMICOLON)) {
+          this.advance();
+        }
+
+        return {
+          type: "FieldDefinition",
+          fieldType,
+          name,
+          start: start.start,
+          end: name.end,
+          line: start.line,
+          column: start.column,
+        };
+      }
+    } catch (error) {
+      // 如果第一种格式失败，回到原位置尝试第二种格式
+      this.current = savedPosition;
     }
 
-    // 解析字段名
-    const name = this.parseIdentifier();
+    try {
+      // 尝试第二种格式：name type
+      if (this.check(TokenType.IDENTIFIER)) {
+        const name = this.parseIdentifier();
+        
+        if (this.checkType()) {
+          const fieldType = this.parseTypeReference();
+          
+          // 可选的分号
+          if (this.check(TokenType.SEMICOLON)) {
+            this.advance();
+          }
 
-    // 可选的分号
-    if (this.check(TokenType.SEMICOLON)) {
-      this.advance();
+          return {
+            type: "FieldDefinition",
+            fieldType,
+            name,
+            start: start.start,
+            end: fieldType.end,
+            line: start.line,
+            column: start.column,
+          };
+        }
+      }
+    } catch (error) {
+      // 如果两种格式都失败，回到原位置
+      this.current = savedPosition;
     }
 
-    return {
-      type: "FieldDefinition",
-      fieldType,
-      name,
-      start: start.start,
-      end: name.end,
-      line: start.line,
-      column: start.column,
-    };
+    return null;
   }
 
   private parseApiDefinition(): ApiDefinition {
@@ -314,6 +366,52 @@ export class ApiParser {
     return {
       type: "EnumDefinition",
       name,
+      values,
+      start: start.start,
+      end: end.end,
+      line: start.line,
+      column: start.column,
+    };
+  }
+
+  private parseInlineEnumDefinition(): EnumDefinition {
+    const start = this.peek();
+    this.consume(TokenType.ENUM, "Expected 'enum'");
+    this.consume(TokenType.LEFT_BRACE, "Expected '{'");
+
+    const values: EnumValue[] = [];
+
+    while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
+      if (this.isComment(this.peek())) {
+        this.advance();
+        continue;
+      }
+
+      const value = this.parseEnumValue();
+      if (value) {
+        values.push(value);
+      }
+
+      if (this.check(TokenType.COMMA)) {
+        this.advance();
+      }
+    }
+
+    const end = this.consume(TokenType.RIGHT_BRACE, "Expected '}'");
+
+    // 为内联枚举创建一个临时名称
+    const tempName: Identifier = {
+      type: "Identifier",
+      name: "",
+      start: start.start,
+      end: start.end,
+      line: start.line,
+      column: start.column,
+    };
+
+    return {
+      type: "EnumDefinition",
+      name: tempName,
       values,
       start: start.start,
       end: end.end,
@@ -482,6 +580,8 @@ export class ApiParser {
       TokenType.FLOAT,
       TokenType.DOUBLE,
       TokenType.STRING,
+      TokenType.NUMBER_TYPE,
+      TokenType.BOOLEAN_TYPE,
     ].includes(type);
   }
 
