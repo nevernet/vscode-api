@@ -26,7 +26,7 @@ export class CompletionIndex {
 
     const items: CompletionItem[] = [];
     const structs = this.symbolTable.getSymbolsOfKind(SymbolKind.Struct);
-    
+
     for (const struct of structs) {
       items.push({
         label: struct.name,
@@ -52,13 +52,14 @@ export class CompletionIndex {
 
     const items: CompletionItem[] = [];
     const enums = this.symbolTable.getSymbolsOfKind(SymbolKind.Enum);
-    
+
     for (const enumSymbol of enums) {
       items.push({
         label: enumSymbol.name,
         kind: CompletionItemKind.Enum,
         detail: `enum ${enumSymbol.name}`,
-        documentation: enumSymbol.documentation || `枚举定义: ${enumSymbol.name}`,
+        documentation:
+          enumSymbol.documentation || `枚举定义: ${enumSymbol.name}`,
         insertText: enumSymbol.name,
       });
     }
@@ -78,7 +79,7 @@ export class CompletionIndex {
 
     const items: CompletionItem[] = [];
     const enumValues = this.symbolTable.getSymbolsOfKind(SymbolKind.EnumValue);
-    
+
     for (const enumValue of enumValues) {
       items.push({
         label: enumValue.name,
@@ -104,7 +105,7 @@ export class CompletionIndex {
 
     const items: CompletionItem[] = [];
     const apis = this.symbolTable.getSymbolsOfKind(SymbolKind.Api);
-    
+
     for (const api of apis) {
       items.push({
         label: api.name,
@@ -123,7 +124,7 @@ export class CompletionIndex {
    * 获取字段补全项（用于结构体内部）
    */
   public getFieldCompletions(structName?: string): CompletionItem[] {
-    const cacheKey = `fields_${structName || 'all'}`;
+    const cacheKey = `fields_${structName || "all"}`;
     if (this.isCacheValid(cacheKey)) {
       return this.cachedCompletions.get(cacheKey) || [];
     }
@@ -138,12 +139,12 @@ export class CompletionIndex {
       // 获取所有字段
       fields = this.symbolTable.getSymbolsOfKind(SymbolKind.Field);
     }
-    
+
     for (const field of fields) {
       items.push({
         label: field.name,
         kind: CompletionItemKind.Field,
-        detail: `${field.name}: ${field.type || 'unknown'}`,
+        detail: `${field.name}: ${field.type || "unknown"}`,
         documentation: field.documentation || `字段: ${field.name}`,
         insertText: field.name,
       });
@@ -163,7 +164,7 @@ export class CompletionIndex {
     }
 
     const items: CompletionItem[] = [];
-    
+
     // 添加基础类型
     const basicTypes = [
       { name: "int", detail: "整数类型" },
@@ -184,7 +185,7 @@ export class CompletionIndex {
 
     // 添加用户定义的结构体
     items.push(...this.getStructCompletions());
-    
+
     // 添加用户定义的枚举
     items.push(...this.getEnumCompletions());
 
@@ -195,7 +196,9 @@ export class CompletionIndex {
   /**
    * 根据上下文获取智能补全建议
    */
-  public getContextualCompletions(context: CompletionContext): CompletionItem[] {
+  public getContextualCompletions(
+    context: CompletionContext
+  ): CompletionItem[] {
     const items: CompletionItem[] = [];
 
     switch (context.type) {
@@ -241,13 +244,37 @@ export class CompletionIndex {
    */
   public getGlobalKeywords(): CompletionItem[] {
     return [
-      { label: "typedef", kind: CompletionItemKind.Keyword, detail: "类型定义关键字" },
-      { label: "struct", kind: CompletionItemKind.Keyword, detail: "结构体关键字" },
+      {
+        label: "typedef",
+        kind: CompletionItemKind.Keyword,
+        detail: "类型定义关键字",
+      },
+      {
+        label: "struct",
+        kind: CompletionItemKind.Keyword,
+        detail: "结构体关键字",
+      },
       { label: "enum", kind: CompletionItemKind.Keyword, detail: "枚举关键字" },
-      { label: "api", kind: CompletionItemKind.Keyword, detail: "API定义关键字" },
-      { label: "apilist", kind: CompletionItemKind.Keyword, detail: "API列表关键字" },
-      { label: "input", kind: CompletionItemKind.Keyword, detail: "输入参数关键字" },
-      { label: "output", kind: CompletionItemKind.Keyword, detail: "输出参数关键字" },
+      {
+        label: "api",
+        kind: CompletionItemKind.Keyword,
+        detail: "API定义关键字",
+      },
+      {
+        label: "apilist",
+        kind: CompletionItemKind.Keyword,
+        detail: "API列表关键字",
+      },
+      {
+        label: "input",
+        kind: CompletionItemKind.Keyword,
+        detail: "输入参数关键字",
+      },
+      {
+        label: "output",
+        kind: CompletionItemKind.Keyword,
+        detail: "输出参数关键字",
+      },
     ];
   }
 
@@ -293,7 +320,13 @@ export class CompletionIndex {
  * 补全上下文接口
  */
 export interface CompletionContext {
-  type: "struct-field-type" | "api-input-output" | "enum-value" | "global-scope" | "struct-reference" | "unknown";
+  type:
+    | "struct-field-type"
+    | "api-input-output"
+    | "enum-value"
+    | "global-scope"
+    | "struct-reference"
+    | "unknown";
   structName?: string;
   enumName?: string;
   line?: string;
@@ -309,7 +342,10 @@ export function analyzeCompletionContext(
   position: { line: number; character: number }
 ): CompletionContext {
   const line = currentLine.trim().toLowerCase();
-  const lineToPosition = currentLine.substring(0, position.character).trim().toLowerCase();
+  const lineToPosition = currentLine
+    .substring(0, position.character)
+    .trim()
+    .toLowerCase();
 
   // 检查是否在结构体字段类型位置
   if (lineToPosition.match(/^\s*\w+\s+$/) && isInStruct(lines, position.line)) {
@@ -348,7 +384,7 @@ function isInStruct(lines: string[], currentLineIndex: number): boolean {
 
   for (let i = 0; i <= currentLineIndex; i++) {
     const line = lines[i] || "";
-    
+
     if (line.includes("struct {")) {
       inStruct = true;
       braceCount = 1;
@@ -374,7 +410,7 @@ function isInEnum(lines: string[], currentLineIndex: number): boolean {
 
   for (let i = 0; i <= currentLineIndex; i++) {
     const line = lines[i] || "";
-    
+
     if (line.includes("enum {")) {
       inEnum = true;
       braceCount = 1;
@@ -399,7 +435,7 @@ function isInAnyBlock(lines: string[], currentLineIndex: number): boolean {
 
   for (let i = 0; i <= currentLineIndex; i++) {
     const line = lines[i] || "";
-    
+
     if (line.includes("{")) {
       braceCount++;
     } else if (line.includes("}")) {

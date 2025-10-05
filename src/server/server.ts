@@ -132,8 +132,17 @@ connection.onInitialized(() => {
   if (hasWorkspaceFolderCapability) {
     connection.workspace.onDidChangeWorkspaceFolders((_event) => {
       connection.console.log("Workspace folder change event received.");
+      // 工作区变更时重新索引所有文档
+      setTimeout(() => {
+        indexAllDocuments();
+      }, 1000); // 延迟1秒，确保文档已加载
     });
   }
+  
+  // 初始化时索引所有已打开的文档
+  setTimeout(() => {
+    indexAllDocuments();
+  }, 2000); // 延迟2秒，确保所有文档都已加载
 });
 
 // 配置变更处理
@@ -149,6 +158,11 @@ connection.onDidChangeConfiguration((change) => {
 
   // 重新验证所有打开的文档
   documents.all().forEach(validateTextDocument);
+  
+  // 重新索引所有文档，确保符号表是最新的
+  setTimeout(() => {
+    indexAllDocuments();
+  }, 500);
 });
 
 function getDocumentSettings(
@@ -324,9 +338,34 @@ function indexDocument(document: TextDocument) {
     
     // 刷新补全索引
     completionIndex.refresh();
+    
+    console.log(`Indexed document: ${document.uri}, total symbols: ${globalSymbolTable.getAllSymbols().length}`);
   } catch (error) {
     // 解析错误不影响自动完成功能
     console.warn("Document indexing failed:", (error as Error).message);
+  }
+}
+
+// 索引工作区中的所有文档
+function indexAllDocuments() {
+  try {
+    console.log("Starting to index all documents in workspace...");
+    const allDocuments = documents.all();
+    let indexedCount = 0;
+    
+    for (const document of allDocuments) {
+      if (document.uri.endsWith('.api')) {
+        indexDocument(document);
+        indexedCount++;
+      }
+    }
+    
+    console.log(`Indexed ${indexedCount} API documents, total symbols: ${globalSymbolTable.getAllSymbols().length}`);
+    
+    // 刷新补全索引
+    completionIndex.refresh();
+  } catch (error) {
+    console.error("Failed to index all documents:", error);
   }
 }
 
@@ -496,7 +535,19 @@ connection.onDefinition(
       }
 
       // 查找符号定义
-      const symbol = globalSymbolTable.getSymbol(word);
+      let symbol = globalSymbolTable.getSymbol(word);
+      
+      // 如果没有找到符号，尝试刷新索引后再次查找
+      if (!symbol) {
+        try {
+          // 强制重新索引当前文档
+          indexDocument(document);
+          symbol = globalSymbolTable.getSymbol(word);
+        } catch (indexError) {
+          console.warn("Failed to re-index document for definition lookup:", indexError);
+        }
+      }
+      
       if (symbol) {
         return [symbol.location];
       }

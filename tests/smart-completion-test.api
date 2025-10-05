@@ -2,15 +2,15 @@
 
 // 全局定义
 typedef struct {
-  id Int
-  name String
-  email String
+  id           Int
+  name         String
+  email        String
 } UserInfo
 
 typedef struct {
-  code Int
-  message String
-  data UserInfo
+  code         Int
+  message      String
+  data         UserInfo
 } ApiResponse
 
 typedef enum {
@@ -28,9 +28,9 @@ api "getUserInfo" {
 // 另一个结构体定义
 typedef struct {
   // 在这里输入应该提示所有类型: Int, String, UserInfo, ApiResponse等
-  userId Int
-  status UserStatus  // 这里应该提示UserStatus枚举
-  createdAt String
+  userId       Int
+  status       UserStatus // 这里应该提示UserStatus枚举
+  createdAt    String
 } UserProfile
 
 // 测试枚举
