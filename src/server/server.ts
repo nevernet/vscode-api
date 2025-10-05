@@ -454,151 +454,206 @@ connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
 // 跳转到定义
 connection.onDefinition(
   (params: TextDocumentPositionParams): Location[] | null => {
-    const document = documents.get(params.textDocument.uri);
-    if (!document) {
+    try {
+      const document = documents.get(params.textDocument.uri);
+      if (!document) {
+        return null;
+      }
+
+      const text = document.getText();
+      
+      // 性能保护：限制文档大小
+      if (text.length > 500000) {
+        console.warn("Document too large for definition lookup:", text.length);
+        return null;
+      }
+
+      const offset = document.offsetAt(params.position);
+
+      // 安全的词边界检测
+      let start = offset;
+      let end = offset;
+
+      // 向前查找词的开始（限制搜索范围）
+      const maxSearchBack = 50; // 最多向前搜索50个字符
+      while (start > Math.max(0, offset - maxSearchBack) && start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
+        start--;
+      }
+
+      // 向后查找词的结束（限制搜索范围）
+      const maxSearchForward = 50; // 最多向后搜索50个字符
+      while (end < Math.min(text.length, offset + maxSearchForward) && end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
+        end++;
+      }
+
+      const word = text.substring(start, end);
+      if (!word || word.length > 100) { // 防止异常长的词
+        return null;
+      }
+
+      // 查找符号定义
+      const symbol = globalSymbolTable.getSymbol(word);
+      if (symbol) {
+        return [symbol.location];
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Definition lookup error:", error);
       return null;
     }
-
-    // 获取当前位置的词
-    const text = document.getText();
-    const offset = document.offsetAt(params.position);
-
-    // 简单的词边界检测
-    let start = offset;
-    let end = offset;
-
-    // 向前查找词的开始
-    while (start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
-      start--;
-    }
-
-    // 向后查找词的结束
-    while (end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
-      end++;
-    }
-
-    const word = text.substring(start, end);
-    if (!word) {
-      return null;
-    }
-
-    // 查找符号定义
-    const symbol = globalSymbolTable.getSymbol(word);
-    if (symbol) {
-      return [symbol.location];
-    }
-
-    return null;
   }
 );
 
 // 查找引用
 connection.onReferences((params): Location[] => {
-  const locations: Location[] = [];
-  const document = documents.get(params.textDocument.uri);
-  if (!document) {
-    return locations;
-  }
-
-  // 获取当前位置的词
-  const text = document.getText();
-  const offset = document.offsetAt(params.position);
-
-  let start = offset;
-  let end = offset;
-
-  while (start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
-    start--;
-  }
-
-  while (end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
-    end++;
-  }
-
-  const word = text.substring(start, end);
-  if (!word) {
-    return locations;
-  }
-
-  // 在当前文档中查找所有引用
-  const lines = text.split("\n");
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex];
-    let match;
-    const regex = new RegExp(`\\b${word}\\b`, "g");
-
-    while ((match = regex.exec(line)) !== null) {
-      const location: Location = {
-        uri: params.textDocument.uri,
-        range: {
-          start: { line: lineIndex, character: match.index },
-          end: { line: lineIndex, character: match.index + word.length },
-        },
-      };
-      locations.push(location);
+  try {
+    const locations: Location[] = [];
+    const document = documents.get(params.textDocument.uri);
+    if (!document) {
+      return locations;
     }
-  }
 
-  return locations;
+    const text = document.getText();
+    
+    // 性能保护：限制文档大小
+    if (text.length > 200000) {
+      console.warn("Document too large for reference search:", text.length);
+      return locations;
+    }
+
+    const offset = document.offsetAt(params.position);
+
+    // 安全的词边界检测（同定义查找）
+    let start = offset;
+    let end = offset;
+    const maxSearchBack = 50;
+    const maxSearchForward = 50;
+
+    while (start > Math.max(0, offset - maxSearchBack) && start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
+      start--;
+    }
+
+    while (end < Math.min(text.length, offset + maxSearchForward) && end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
+      end++;
+    }
+
+    const word = text.substring(start, end);
+    if (!word || word.length > 100) {
+      return locations;
+    }
+
+    // 限制搜索行数，避免大文档卡死
+    const lines = text.split("\n");
+    const maxLines = Math.min(lines.length, 10000); // 最多搜索10000行
+    
+    for (let lineIndex = 0; lineIndex < maxLines; lineIndex++) {
+      const line = lines[lineIndex];
+      
+      // 避免在非常长的行上进行正则搜索
+      if (line.length > 1000) {
+        continue;
+      }
+      
+      let match;
+      const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "g");
+
+      while ((match = regex.exec(line)) !== null) {
+        const location: Location = {
+          uri: params.textDocument.uri,
+          range: {
+            start: { line: lineIndex, character: match.index },
+            end: { line: lineIndex, character: match.index + word.length },
+          },
+        };
+        locations.push(location);
+        
+        // 防止找到过多引用导致性能问题
+        if (locations.length > 1000) {
+          console.warn("Too many references found, limiting results");
+          return locations;
+        }
+      }
+    }
+
+    return locations;
+  } catch (error) {
+    console.error("Reference search error:", error);
+    return [];
+  }
 });
 
 // 悬停信息
 connection.onHover((params): { contents: string } | null => {
-  const document = documents.get(params.textDocument.uri);
-  if (!document) {
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) {
+      return null;
+    }
+
+    const text = document.getText();
+    
+    // 性能保护：限制文档大小
+    if (text.length > 500000) {
+      console.warn("Document too large for hover lookup:", text.length);
+      return null;
+    }
+
+    const offset = document.offsetAt(params.position);
+
+    // 安全的词边界检测（同定义查找）
+    let start = offset;
+    let end = offset;
+    const maxSearchBack = 50;
+    const maxSearchForward = 50;
+
+    while (start > Math.max(0, offset - maxSearchBack) && start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
+      start--;
+    }
+
+    while (end < Math.min(text.length, offset + maxSearchForward) && end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
+      end++;
+    }
+
+    const word = text.substring(start, end);
+    if (!word || word.length > 100) {
+      return null;
+    }
+
+    // 查找符号信息
+    const symbol = globalSymbolTable.getSymbol(word);
+    if (symbol) {
+      return {
+        contents: `**${symbol.detail || symbol.name}**\n\n${symbol.documentation || ""}`,
+      };
+    }
+
+    // 检查是否是内置类型或关键字
+    if (KEYWORDS.includes(word)) {
+      return {
+        contents: `**Keyword**: ${word}\n\nAPI language keyword`,
+      };
+    }
+
+    if (CONSTANTS.includes(word)) {
+      return {
+        contents: `**Constant**: ${word}\n\nAPI language constant`,
+      };
+    }
+
+    const builtinSymbols = getBuiltinSymbols();
+    const builtin = builtinSymbols.find((s) => s.name === word);
+    if (builtin) {
+      return {
+        contents: `**${builtin.detail}**\n\n${builtin.documentation}`,
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Hover lookup error:", error);
     return null;
   }
-
-  // 获取当前位置的词
-  const text = document.getText();
-  const offset = document.offsetAt(params.position);
-
-  let start = offset;
-  let end = offset;
-
-  while (start > 0 && /[a-zA-Z0-9_]/.test(text[start - 1])) {
-    start--;
-  }
-
-  while (end < text.length && /[a-zA-Z0-9_]/.test(text[end])) {
-    end++;
-  }
-
-  const word = text.substring(start, end);
-  if (!word) {
-    return null;
-  }
-
-  // 查找符号信息
-  const symbol = globalSymbolTable.getSymbol(word);
-  if (symbol) {
-    return {
-      contents: `**${symbol.detail}**\n\n${symbol.documentation || ""}`,
-    };
-  }
-
-  // 检查是否是内置类型或关键字
-  if (KEYWORDS.includes(word)) {
-    return {
-      contents: `**Keyword**: ${word}\n\nAPI language keyword`,
-    };
-  }
-
-  if (CONSTANTS.includes(word)) {
-    return {
-      contents: `**Constant**: ${word}\n\nAPI language constant`,
-    };
-  }
-
-  const builtinSymbols = getBuiltinSymbols();
-  const builtin = builtinSymbols.find((s) => s.name === word);
-  if (builtin) {
-    return {
-      contents: `**${builtin.detail}**\n\n${builtin.documentation}`,
-    };
-  }
-
-  return null;
 });
 
 // 文档格式化
@@ -652,12 +707,12 @@ function formatApiDocument(
 ): string {
   try {
     // 输入验证
-    if (!text || typeof text !== 'string') {
+    if (!text || typeof text !== "string") {
       console.warn("Invalid text input for formatting");
-      return text || '';
+      return text || "";
     }
-    
-    if (!formatSettings || typeof formatSettings.indentSize !== 'number') {
+
+    if (!formatSettings || typeof formatSettings.indentSize !== "number") {
       console.warn("Invalid format settings");
       return text;
     }
@@ -668,99 +723,99 @@ function formatApiDocument(
     const indentSize = Math.max(0, formatSettings.indentSize); // 确保缩进大小不为负数
     let currentContext: string[] = []; // 跟踪当前上下文
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
 
-    // 处理空行
-    if (!line) {
-      formattedLines.push(line);
-      continue;
-    }
+      // 处理空行
+      if (!line) {
+        formattedLines.push(line);
+        continue;
+      }
 
-    // 处理注释 - 需要根据当前缩进级别来缩进注释
-    if (line.startsWith("//")) {
-      const commentIndent = " ".repeat(indentLevel * indentSize);
-      formattedLines.push(commentIndent + line);
-      continue;
-    }
+      // 处理注释 - 需要根据当前缩进级别来缩进注释
+      if (line.startsWith("//")) {
+        const commentIndent = " ".repeat(indentLevel * indentSize);
+        formattedLines.push(commentIndent + line);
+        continue;
+      }
 
-    // 特殊处理：检查是否是结构体定义的结束行（如 "} StructName"）
-    const isStructEndWithName = line.match(/^\}\s+[a-zA-Z_][a-zA-Z0-9_]*$/);
+      // 特殊处理：检查是否是结构体定义的结束行（如 "} StructName"）
+      const isStructEndWithName = line.match(/^\}\s+[a-zA-Z_][a-zA-Z0-9_]*$/);
 
-    // 减少缩进的情况
-    if (line === "}" || isStructEndWithName) {
-      indentLevel = Math.max(0, indentLevel - 1);
-      currentContext.pop();
-    }
+      // 减少缩进的情况
+      if (line === "}" || isStructEndWithName) {
+        indentLevel = Math.max(0, indentLevel - 1);
+        currentContext.pop();
+      }
 
-    // 计算缩进 - 顶层声明通常不缩进，但要考虑上下文
-    let indent = "";
-    const isTopLevelDeclaration =
-      line.startsWith("typedef") ||
-      line.startsWith("struct ") ||
-      line.startsWith("enum ");
+      // 计算缩进 - 顶层声明通常不缩进，但要考虑上下文
+      let indent = "";
+      const isTopLevelDeclaration =
+        line.startsWith("typedef") ||
+        line.startsWith("struct ") ||
+        line.startsWith("enum ");
 
-    // api 和 apilist 的特殊处理：如果在 apilist 内部，api 应该缩进
-    const isApiDeclaration = line.startsWith("api ");
-    const isApiListDeclaration = line.startsWith("apilist ");
-    const isInApiList =
-      currentContext.length > 0 &&
-      currentContext[currentContext.length - 1] === "apilist";
+      // api 和 apilist 的特殊处理：如果在 apilist 内部，api 应该缩进
+      const isApiDeclaration = line.startsWith("api ");
+      const isApiListDeclaration = line.startsWith("apilist ");
+      const isInApiList =
+        currentContext.length > 0 &&
+        currentContext[currentContext.length - 1] === "apilist";
 
-    // 判断是否应该缩进：
-    // 1. 不是顶层声明的普通行应该缩进
-    // 2. 在 apilist 内部的 api 声明应该缩进
-    // 3. 结构体结束行不缩进
-    const shouldIndent =
-      (!isTopLevelDeclaration &&
-        !isApiListDeclaration &&
-        !isStructEndWithName) ||
-      (isApiDeclaration && isInApiList);
+      // 判断是否应该缩进：
+      // 1. 不是顶层声明的普通行应该缩进
+      // 2. 在 apilist 内部的 api 声明应该缩进
+      // 3. 结构体结束行不缩进
+      const shouldIndent =
+        (!isTopLevelDeclaration &&
+          !isApiListDeclaration &&
+          !isStructEndWithName) ||
+        (isApiDeclaration && isInApiList);
 
-    if (shouldIndent) {
-      indent = " ".repeat(indentLevel * indentSize);
-    }
+      if (shouldIndent) {
+        indent = " ".repeat(indentLevel * indentSize);
+      }
 
-    // 特殊处理字段定义 - 仅在 typedef struct 内进行对齐
-    if (
-      isFieldDefinition(line) &&
-      isInTypedefStruct(currentContext) &&
-      formatSettings.alignFields
-    ) {
-      const formattedField = formatFieldDefinition(line, indent);
-      formattedLines.push(formattedField);
-    } else {
-      formattedLines.push(indent + line);
-    }
-
-    // 增加缩进的情况
-    if (line.endsWith("{")) {
-      indentLevel++;
-      // 跟踪当前上下文 - 区分 typedef struct 和 inline struct
-      if (line.includes("struct")) {
-        // 检查是否是 typedef struct（需要字段对齐）
-        if (line.startsWith("typedef struct")) {
-          currentContext.push("typedef-struct");
-        } else {
-          // inline struct（如 input struct, output struct 等，不需要字段对齐）
-          currentContext.push("inline-struct");
-        }
-      } else if (line.includes("enum")) {
-        // 检查是否是 typedef enum
-        if (line.startsWith("typedef enum")) {
-          currentContext.push("typedef-enum");
-        } else {
-          currentContext.push("inline-enum");
-        }
-      } else if (line.includes("apilist")) {
-        currentContext.push("apilist");
+      // 特殊处理字段定义 - 仅在 typedef struct 内进行对齐
+      if (
+        isFieldDefinition(line) &&
+        isInTypedefStruct(currentContext) &&
+        formatSettings.alignFields
+      ) {
+        const formattedField = formatFieldDefinition(line, indent);
+        formattedLines.push(formattedField);
       } else {
-        currentContext.push("block");
+        formattedLines.push(indent + line);
+      }
+
+      // 增加缩进的情况
+      if (line.endsWith("{")) {
+        indentLevel++;
+        // 跟踪当前上下文 - 区分 typedef struct 和 inline struct
+        if (line.includes("struct")) {
+          // 检查是否是 typedef struct（需要字段对齐）
+          if (line.startsWith("typedef struct")) {
+            currentContext.push("typedef-struct");
+          } else {
+            // inline struct（如 input struct, output struct 等，不需要字段对齐）
+            currentContext.push("inline-struct");
+          }
+        } else if (line.includes("enum")) {
+          // 检查是否是 typedef enum
+          if (line.startsWith("typedef enum")) {
+            currentContext.push("typedef-enum");
+          } else {
+            currentContext.push("inline-enum");
+          }
+        } else if (line.includes("apilist")) {
+          currentContext.push("apilist");
+        } else {
+          currentContext.push("block");
+        }
       }
     }
-  }
 
-  return formattedLines.join("\n");
+    return formattedLines.join("\n");
   } catch (error) {
     console.error("Format document internal error:", error);
     // 如果格式化失败，返回原始文本
