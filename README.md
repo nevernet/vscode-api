@@ -30,15 +30,15 @@
 ```
 
 ### 键盘快捷键
-| 功能       | Windows/Linux  | macOS         | 描述                 |
-| ---------- | -------------- | ------------- | -------------------- |
-| 跳转到定义 | `F12`          | `F12`         | 跳转到符号定义位置   |
-| 查找引用   | `Shift+F12`    | `Shift+F12`   | 查找符号的所有引用   |
-| 预览定义   | `Alt+F12`      | `Opt+F12`     | 在弹窗中预览定义     |
-| 符号重命名 | `F2`           | `F2`          | 重命名符号           |
-| 文件符号   | `Ctrl+Shift+O` | `Cmd+Shift+O` | 当前文件的符号列表   |
-| 工作区符号 | `Ctrl+T`       | `Cmd+T`       | 整个工作区的符号搜索 |
-| 自动补全   | `Ctrl+Space`   | `Cmd+Space`   | 触发代码补全         |
+| 功能         | Windows/Linux  | macOS         | 描述                                    |
+| ------------ | -------------- | ------------- | --------------------------------------- |
+| 跳转到定义   | `F12`          | `F12`         | 跳转到符号定义位置                      |
+| 查找引用     | `Shift+F12`    | `Shift+F12`   | 查找符号的所有引用                      |
+| 预览定义     | `Alt+F12`      | `Opt+F12`     | 在弹窗中预览定义                        |
+| 符号重命名   | `F2`           | `F2`          | 重命名符号                              |
+| Go to Symbol | `Ctrl+Shift+O` | `Cmd+Shift+O` | 当前文件的符号列表，快速跳转到 API 定义 |
+| 工作区符号   | `Ctrl+T`       | `Cmd+T`       | 整个工作区的符号搜索                    |
+| 自动补全     | `Ctrl+Space`   | `Cmd+Space`   | 触发代码补全                            |
 
 ### 工作区配置
 为了获得最佳体验，建议在项目根目录创建 `.vscode/settings.json`：
@@ -198,7 +198,7 @@ struct Product {
 - **🎯 Go to Definition** (`F12`): 跳转到符号定义位置
 - **🔎 Find All References** (`Shift+F12`): 查找符号的所有引用
 - **👁️ Peek Definition** (`Alt+F12`): 预览定义而不离开当前位置
-- **🗂️ Symbol Navigation** (`Ctrl+Shift+O`): 文件内符号导航
+- **🗂️ Go to Symbol** (`Ctrl+Shift+O`): 文件内符号导航，快速跳转到 apilist 和 api 定义
 - **🌐 Workspace Symbols** (`Ctrl+T`): 工作区范围的符号搜索
 
 ### 编辑器增强
@@ -883,6 +883,7 @@ struct OrderItem {
 
 ### 相关文档
 - [BUILD.md](BUILD.md) - 详细构建说明
+- [GO-TO-SYMBOL.md](docs/GO-TO-SYMBOL.md) - Go to Symbol 功能使用指南
 - [Language Server Protocol 规范](https://microsoft.github.io/language-server-protocol/)
 - [VS Code 扩展开发指南](https://code.visualstudio.com/api)
 - [TextMate 语法参考](https://macromates.com/manual/en/language_grammars)
@@ -894,7 +895,17 @@ struct OrderItem {
 
 ## 📝 更新日志
 
-### v0.0.17 (最新) 🚀
+### v0.0.28 (最新) 🚀
+- ✨ **新增 Go to Symbol 功能** - 支持在文档内快速导航到 apilist 和 api 定义
+- 🗂️ **符号面板集成** - 通过 `Ctrl+Shift+O` (macOS: `Cmd+Shift+O`) 打开符号列表
+- 📋 **层次化符号显示** - apilist 显示为类，api 显示为方法，支持嵌套显示
+- 🔍 **模糊搜索支持** - 输入部分方法名即可快速定位
+- 📖 **详细文档** - 新增 [GO-TO-SYMBOL.md](docs/GO-TO-SYMBOL.md) 使用说明
+
+### v0.0.27
+- 之前的版本更新
+
+### v0.0.17
 - 🐛 **改进错误处理** - 单个文件索引错误不再影响整体进度
 - 📊 **优化进度显示** - 显示成功和失败的文件数量统计
 - 🔧 **增强容错能力** - 索引过程更加稳定可靠

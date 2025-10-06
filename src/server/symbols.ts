@@ -325,24 +325,27 @@ export class SymbolCollector implements ASTVisitor<void> {
   }
 
   visitEnumDefinition(node: EnumDefinition): void {
-    const symbol: Symbol = {
-      name: node.name.name,
-      kind: SymbolKind.Enum,
-      location: {
-        uri: this.currentUri,
-        range: {
-          start: { line: node.line - 1, character: node.column - 1 },
-          end: {
-            line: node.line - 1,
-            character: node.column - 1 + node.name.name.length,
+    // 跳过内联枚举（名称为空），它们已经在 typedef 中处理过了
+    if (node.name.name && node.name.name.trim() !== "") {
+      const symbol: Symbol = {
+        name: node.name.name,
+        kind: SymbolKind.Enum,
+        location: {
+          uri: this.currentUri,
+          range: {
+            start: { line: node.line - 1, character: node.column - 1 },
+            end: {
+              line: node.line - 1,
+              character: node.column - 1 + node.name.name.length,
+            },
           },
         },
-      },
-      detail: `enum ${node.name.name}`,
-      documentation: `Enum definition for ${node.name.name}`,
-    };
+        detail: `enum ${node.name.name}`,
+        documentation: `Enum definition for ${node.name.name}`,
+      };
 
-    this.symbolTable.addSymbol(symbol);
+      this.symbolTable.addSymbol(symbol);
+    }
 
     // 收集枚举值
     for (const value of node.values) {

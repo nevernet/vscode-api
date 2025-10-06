@@ -136,6 +136,7 @@ export class ApiParser {
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const fields: FieldDefinition[] = [];
+    let lastPosition = -1; // 用于检测死循环
 
     while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
       // 跳过注释
@@ -143,6 +144,18 @@ export class ApiParser {
         this.advance();
         continue;
       }
+
+      // 检测死循环：如果位置没有变化，说明没有消费任何token
+      if (this.current === lastPosition) {
+        console.warn(
+          `[PARSER] 检测到结构体解析可能陷入死循环，跳过当前token: ${
+            this.peek().type
+          } at line ${this.peek().line}`
+        );
+        this.advance(); // 强制前进，避免死循环
+        continue;
+      }
+      lastPosition = this.current;
 
       const field = this.parseFieldDefinition();
       if (field) {
@@ -253,6 +266,7 @@ export class ApiParser {
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const body: ApiBodyStatement[] = [];
+    let lastPosition = -1; // 用于检测死循环
 
     while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
       // 跳过注释
@@ -260,6 +274,18 @@ export class ApiParser {
         this.advance();
         continue;
       }
+
+      // 检测死循环：如果位置没有变化，说明没有消费任何token
+      if (this.current === lastPosition) {
+        console.warn(
+          `[PARSER] 检测到API定义解析可能陷入死循环，跳过当前token: ${
+            this.peek().type
+          } at line ${this.peek().line}`
+        );
+        this.advance(); // 强制前进，避免死循环
+        continue;
+      }
+      lastPosition = this.current;
 
       const stmt = this.parseApiBodyStatement();
       if (stmt) {
@@ -288,6 +314,7 @@ export class ApiParser {
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const apis: ApiDefinition[] = [];
+    let lastPosition = -1; // 用于检测死循环
 
     while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
       // 跳过注释
@@ -295,6 +322,18 @@ export class ApiParser {
         this.advance();
         continue;
       }
+
+      // 检测死循环：如果位置没有变化，说明没有消费任何token
+      if (this.current === lastPosition) {
+        console.warn(
+          `[PARSER] 检测到API列表解析可能陷入死循环，跳过当前token: ${
+            this.peek().type
+          } at line ${this.peek().line}`
+        );
+        this.advance(); // 强制前进，避免死循环
+        continue;
+      }
+      lastPosition = this.current;
 
       // 在 apilist 内部解析 api 定义
       if (this.check(TokenType.API)) {
@@ -388,6 +427,7 @@ export class ApiParser {
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const fields: FieldDefinition[] = [];
+    let lastPosition = -1; // 用于检测死循环
 
     while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
       // 跳过注释
@@ -395,6 +435,18 @@ export class ApiParser {
         this.advance();
         continue;
       }
+
+      // 检测死循环：如果位置没有变化，说明没有消费任何token
+      if (this.current === lastPosition) {
+        console.warn(
+          `[PARSER] 检测到内联结构体解析可能陷入死循环，跳过当前token: ${
+            this.peek().type
+          } at line ${this.peek().line}`
+        );
+        this.advance(); // 强制前进，避免死循环
+        continue;
+      }
+      lastPosition = this.current;
 
       const field = this.parseFieldDefinition();
       if (field) {
@@ -451,12 +503,25 @@ export class ApiParser {
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const values: EnumValue[] = [];
+    let lastPosition = -1; // 用于检测死循环
 
     while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
       if (this.isComment(this.peek())) {
         this.advance();
         continue;
       }
+
+      // 检测死循环：如果位置没有变化，说明没有消费任何token
+      if (this.current === lastPosition) {
+        console.warn(
+          `[PARSER] 检测到枚举解析可能陷入死循环，跳过当前token: ${
+            this.peek().type
+          } at line ${this.peek().line}`
+        );
+        this.advance(); // 强制前进，避免死循环
+        continue;
+      }
+      lastPosition = this.current;
 
       const value = this.parseEnumValue();
       if (value) {
@@ -487,12 +552,25 @@ export class ApiParser {
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const values: EnumValue[] = [];
+    let lastPosition = -1; // 用于检测死循环
 
     while (!this.check(TokenType.RIGHT_BRACE) && !this.isAtEnd()) {
       if (this.isComment(this.peek())) {
         this.advance();
         continue;
       }
+
+      // 检测死循环：如果位置没有变化，说明没有消费任何token
+      if (this.current === lastPosition) {
+        console.warn(
+          `[PARSER] 检测到枚举解析可能陷入死循环，跳过当前token: ${
+            this.peek().type
+          } at line ${this.peek().line}`
+        );
+        this.advance(); // 强制前进，避免死循环
+        continue;
+      }
+      lastPosition = this.current;
 
       const value = this.parseEnumValue();
       if (value) {
@@ -537,8 +615,14 @@ export class ApiParser {
     const name = this.parseIdentifier();
     let value: NumberLiteral | undefined;
 
+    // 支持两种格式：
+    // 1. Name = Value  (带等号)
+    // 2. Name Value    (不带等号，直接跟数字)
     if (this.check(TokenType.EQUALS)) {
       this.advance();
+      value = this.parseNumberLiteral();
+    } else if (this.check(TokenType.NUMBER)) {
+      // 直接跟数字（没有等号）
       value = this.parseNumberLiteral();
     }
 

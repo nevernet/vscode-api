@@ -16,6 +16,9 @@ import {
   Range,
   DocumentFormattingParams,
   TextEdit,
+  DocumentSymbol,
+  SymbolKind as LSPSymbolKind,
+  DocumentSymbolParams,
 } from "vscode-languageserver/node";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -281,6 +284,8 @@ connection.onInitialize((params: InitializeParams) => {
       hoverProvider: true,
       // 支持文档格式化
       documentFormattingProvider: true,
+      // 支持文档符号（Go to Symbol）
+      documentSymbolProvider: true,
     },
   };
 
@@ -328,9 +333,14 @@ connection.onInitialized(() => {
     if (INDEXING_ENABLED) {
       createManagedTimeout(async () => {
         try {
+          console.log("[INIT] 开始加载缓存或索引工作区...");
           const cacheLoaded = await loadCacheFromFile();
           if (!cacheLoaded) {
+            console.log("[INIT] 缓存未找到或已过期，开始全量索引...");
             indexAllDocuments();
+          } else {
+            console.log("[INIT] 缓存加载成功，代码补全已可用");
+            notifyIndexingStatus("idle", "缓存加载完成，代码补全已就绪");
           }
         } catch (error) {
           console.error("[INIT] 缓存加载失败:", error);
@@ -341,7 +351,7 @@ connection.onInitialized(() => {
             console.error("[INIT] 索引失败:", indexError);
           }
         }
-      }, 2000); // 延迟2秒，确保所有文档都已加载
+      }, 500); // 减少延迟到500ms，更快开始索引
     } else {
       console.log("[INIT] 索引系统已禁用，跳过初始索引");
       notifyIndexingStatus("idle", "索引系统已禁用");
@@ -420,13 +430,53 @@ let globalTimers = new Set<NodeJS.Timeout>();
 
 // 清理所有定时器的函数
 function clearAllTimers() {
+  console.log(`[CLEANUP] 开始清理所有定时器和异步任务...`);
+
+  // 1. 清理全局定时器
   console.log(`[CLEANUP] 清理 ${globalTimers.size} 个全局定时器`);
   globalTimers.forEach((timer) => clearTimeout(timer));
   globalTimers.clear();
 
+  // 2. 清理文档索引定时器
   console.log(`[CLEANUP] 清理 ${documentIndexTimers.size} 个文档定时器`);
   documentIndexTimers.forEach((timer) => clearTimeout(timer));
   documentIndexTimers.clear();
+
+  // 3. 停止正在运行的索引进程
+  if (isIndexing) {
+    console.log(`[CLEANUP] 检测到正在运行的索引进程，设置取消标志`);
+    indexingCanceled = true;
+    // 注意：不直接设置 isIndexing = false，让索引任务自己检测并停止
+    // 这样可以确保任务有机会清理自己的状态
+  }
+
+  console.log(`[CLEANUP] 定时器和异步任务清理完成`);
+}
+
+// 强制清理所有运行中的任务和状态（用于紧急停止）
+function forceCleanupAll() {
+  console.log(`[FORCE_CLEANUP] 开始强制清理所有任务和状态...`);
+
+  // 1. 先调用常规清理
+  clearAllTimers();
+
+  // 2. 强制停止索引进程（不等待任务自己停止）
+  if (isIndexing) {
+    console.log(`[FORCE_CLEANUP] 强制停止索引进程`);
+    isIndexing = false;
+    indexingCanceled = false; // 重置取消标志
+  }
+
+  // 3. 清理进度跟踪
+  if (processedFiles.length > 0 || failedFiles.length > 0) {
+    console.log(
+      `[FORCE_CLEANUP] 清理进度跟踪 (已处理: ${processedFiles.length}, 失败: ${failedFiles.length})`
+    );
+    processedFiles = [];
+    failedFiles = [];
+  }
+
+  console.log(`[FORCE_CLEANUP] 强制清理完成`);
 }
 
 // 创建可追踪的setTimeout
@@ -532,38 +582,50 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
         return;
       }
 
-      // 收集符号
-      const collector = new SymbolCollector(
+      // 使用临时符号表来验证当前文档，避免跨文件污染
+      const tempSymbolTable = new SymbolTable();
+      const collector = new SymbolCollector(tempSymbolTable, textDocument.uri);
+      collector.collect(ast);
+
+      // 同时也更新全局符号表（用于跨文件功能如跳转定义）
+      const globalCollector = new SymbolCollector(
         globalSymbolTable,
         textDocument.uri
       );
-      collector.collect(ast);
+      globalCollector.collect(ast);
 
-      // 检查重复定义
-      const duplicates = globalSymbolTable.getDuplicates();
+      // 只检查当前文档内的重复定义（使用临时符号表）
+      const duplicates = tempSymbolTable.getDuplicates();
       for (const [name, symbols] of duplicates) {
         if (symbols.length > 1) {
-          for (let i = 1; i < symbols.length; i++) {
-            const symbol = symbols[i];
-            const diagnostic: Diagnostic = {
-              severity: DiagnosticSeverity.Error,
-              range: symbol.location.range,
-              message: `Duplicate definition of '${name}'. First defined at line ${
-                symbols[0].location.range.start.line + 1
-              }.`,
-              source: "api-language",
-            };
+          // 确保所有重复定义都在当前文档中
+          const allInCurrentDoc = symbols.every(
+            (s) => s.location.uri === textDocument.uri
+          );
 
-            if (hasDiagnosticRelatedInformationCapability) {
-              diagnostic.relatedInformation = [
-                {
-                  location: symbols[0].location,
-                  message: "First definition here",
-                },
-              ];
+          if (allInCurrentDoc) {
+            for (let i = 1; i < symbols.length; i++) {
+              const symbol = symbols[i];
+              const diagnostic: Diagnostic = {
+                severity: DiagnosticSeverity.Error,
+                range: symbol.location.range,
+                message: `Duplicate definition of '${name}'. First defined at line ${
+                  symbols[0].location.range.start.line + 1
+                }.`,
+                source: "api-language",
+              };
+
+              if (hasDiagnosticRelatedInformationCapability) {
+                diagnostic.relatedInformation = [
+                  {
+                    location: symbols[0].location,
+                    message: "First definition here",
+                  },
+                ];
+              }
+
+              diagnostics.push(diagnostic);
             }
-
-            diagnostics.push(diagnostic);
           }
         }
       }
@@ -818,24 +880,24 @@ function indexAllDocuments() {
       let failedCount = 0;
       let totalFiles = 0;
 
-      // 索引已打开的文档
-      for (const document of openDocuments) {
-        if (document.uri.endsWith(".api")) {
-          console.log(`[INDEX_ALL] 索引已打开文档: ${document.uri}`);
-          indexDocument(document, true);
-          indexedCount++;
-          totalFiles++;
+      // // 索引已打开的文档
+      // for (const document of openDocuments) {
+      //   if (document.uri.endsWith(".api")) {
+      //     console.log(`[INDEX_ALL] 索引已打开文档: ${document.uri}`);
+      //     indexDocument(document, true);
+      //     indexedCount++;
+      //     totalFiles++;
 
-          // 每处理一个文档就让出执行权，并检查取消状态
-          await new Promise((resolve) => setImmediate(resolve));
+      //     // 每处理一个文档就让出执行权，并检查取消状态
+      //     await new Promise((resolve) => setImmediate(resolve));
 
-          // 额外的取消检查
-          if (indexingCanceled) {
-            console.log("[INDEX_ALL] 在文档处理后检测到取消信号");
-            return;
-          }
-        }
-      }
+      //     // 额外的取消检查
+      //     if (indexingCanceled) {
+      //       console.log("[INDEX_ALL] 在文档处理后检测到取消信号");
+      //       return;
+      //     }
+      //   }
+      // }
 
       // 然后扫描工作区文件系统中的所有 .api 文件
       if (workspaceRoot) {
@@ -897,7 +959,9 @@ function indexAllDocuments() {
                   )} 时被取消`
                 );
                 // 取消错误应该中断整个索引流程
-                throw error;
+                // throw error;
+                // notifyIndexingStatus("idle", "索引已取消");
+                // return;
               }
 
               failedCount++;
@@ -913,15 +977,14 @@ function indexAllDocuments() {
             }
           } else {
             console.log(`[INDEX_ALL] 跳过已打开的文件: ${filePath}`);
+            continue;
           }
 
-          // 每处理一个文件就让出执行权，避免阻塞UI
-          await new Promise((resolve) => setImmediate(resolve));
-
-          // 额外的取消检查
+          // 检查取消状态
           if (indexingCanceled) {
             console.log("[INDEX_ALL] 在文件处理后检测到取消信号");
-            throw new Error("索引已取消");
+            notifyIndexingStatus("idle", "索引已取消");
+            return;
           }
         }
       } else {
@@ -938,24 +1001,29 @@ function indexAllDocuments() {
       // 刷新补全索引
       console.log("[INDEX_ALL] 刷新补全索引");
       notifyIndexingStatus("indexing", "正在更新补全索引...");
-      await new Promise((resolve) => setImmediate(resolve));
       completionIndex.refresh();
 
       // 保存缓存到文件
       console.log("[INDEX_ALL] 保存缓存");
       notifyIndexingStatus("indexing", "正在保存缓存...");
-      await new Promise((resolve) => setImmediate(resolve));
       saveCacheToFile();
 
       console.log("[INDEX_ALL] 所有文档索引完成");
+
+      // 统计符号信息
+      const totalSymbols = globalSymbolTable.getAllSymbols().length;
+      const structs = globalSymbolTable.getSymbolsOfKind(
+        SymbolKind.Struct
+      ).length;
+      const enums = globalSymbolTable.getSymbolsOfKind(SymbolKind.Enum).length;
+      const apis = globalSymbolTable.getSymbolsOfKind(SymbolKind.Api).length;
+
       const statusMessage =
         failedCount > 0
-          ? `索引完成：${indexedCount} 成功，${failedCount} 失败，${
-              globalSymbolTable.getAllSymbols().length
-            } 个符号`
-          : `索引完成：${indexedCount} 个文件，${
-              globalSymbolTable.getAllSymbols().length
-            } 个符号`;
+          ? `索引完成：${indexedCount} 成功，${failedCount} 失败，${totalSymbols} 个符号 (${structs} 结构体, ${enums} 枚举, ${apis} API)`
+          : `索引完成：${indexedCount} 个文件，${totalSymbols} 个符号 (${structs} 结构体, ${enums} 枚举, ${apis} API)`;
+      console.log(`[INDEX_ALL] ${statusMessage}`);
+      console.log(`[INDEX_ALL] ✅ 全局代码补全已可用！`);
 
       notifyIndexingStatus("idle", statusMessage);
     } catch (error) {
@@ -1032,9 +1100,6 @@ function safeIndexAllDocuments() {
               failedCount++;
             }
           }
-
-          // 每处理一个文档就让出执行权
-          await new Promise((resolve) => setImmediate(resolve));
         }
       }
 
@@ -1101,9 +1166,6 @@ function safeIndexAllDocuments() {
               }
             }
           }
-
-          // 每处理一个文件就让出执行权
-          await new Promise((resolve) => setImmediate(resolve));
         }
       }
 
@@ -1115,7 +1177,6 @@ function safeIndexAllDocuments() {
 
       // 刷新补全索引
       console.log("[SAFE_INDEX_ALL] 刷新补全索引");
-      await new Promise((resolve) => setImmediate(resolve));
       completionIndex.refresh();
 
       console.log("[SAFE_INDEX_ALL] 安全索引完成");
@@ -1147,7 +1208,6 @@ async function scanWorkspaceForApiFiles(
   maxDepth: number = 10
 ): Promise<string[]> {
   const apiFiles: string[] = [];
-  let scannedDirCount = 0;
   const MAX_FILES = 10000; // 限制最大文件数量
   const startTime = Date.now();
   const SCAN_TIMEOUT = 30000; // 30秒扫描超时
@@ -1203,14 +1263,12 @@ async function scanWorkspaceForApiFiles(
             continue;
           }
 
-          // 每扫描几个目录就让出执行权
-          scannedDirCount++;
-          if (scannedDirCount % 3 === 0) {
-            await new Promise((resolve) => setImmediate(resolve));
-          }
-
           await scanDirectory(fullPath, currentDepth + 1);
-        } else if (entry.isFile() && entry.name.endsWith(".api")) {
+        } else if (
+          entry.isFile() &&
+          entry.name.endsWith(".api") &&
+          entry.name !== "__debug.api"
+        ) {
           // 在添加到列表前，验证文件确实存在且可读
           try {
             await fs.promises.access(fullPath, fs.constants.R_OK);
@@ -1316,29 +1374,26 @@ async function indexWorkspaceFile(filePath: string): Promise<void> {
 
     // 创建一个临时的 TextDocument 对象用于索引
     const fileUri = `file://${filePath}`;
-    const tempDocument = {
-      uri: fileUri,
-      getText: () => fileContent,
-      lineCount: fileContent.split("\n").length,
-      offsetAt: (position: any) => {
-        const lines = fileContent.split("\n");
-        let offset = 0;
-        for (let i = 0; i < position.line && i < lines.length; i++) {
-          offset += lines[i].length + 1; // +1 for newline
-        }
-        return offset + position.character;
-      },
-    } as TextDocument;
+    // const tempDocument = {
+    //   uri: fileUri,
+    //   getText: () => fileContent,
+    //   lineCount: fileContent.split("\n").length,
+    //   offsetAt: (position: any) => {
+    //     const lines = fileContent.split("\n");
+    //     let offset = 0;
+    //     for (let i = 0; i < position.line && i < lines.length; i++) {
+    //       offset += lines[i].length + 1; // +1 for newline
+    //     }
+    //     return offset + position.character;
+    //   },
+    // } as TextDocument;
 
     console.log(`[INDEX_FILE] 开始词法分析: ${filePath}`);
-    await new Promise((resolve) => setImmediate(resolve)); // 让出执行权
-
     const lexer = new ApiLexer(fileContent);
 
     console.log(`[INDEX_FILE] 开始语法分析: ${filePath}`);
-    await new Promise((resolve) => setImmediate(resolve)); // 让出执行权
-
     const parser = new ApiParser(lexer);
+    console.log(`[INDEX_FILE] 初始化ApiParser: ${filePath}`);
 
     // 检查是否取消
     if (indexingCanceled) {
@@ -1355,7 +1410,6 @@ async function indexWorkspaceFile(filePath: string): Promise<void> {
     ])) as any; // 类型断言解决Promise.race的类型问题
 
     console.log(`[INDEX_FILE] 开始符号收集: ${filePath}`);
-    await new Promise((resolve) => setImmediate(resolve)); // 让出执行权
 
     // 收集符号
     const symbolsBeforeCount = globalSymbolTable.getAllSymbols().length;
@@ -2134,10 +2188,152 @@ function formatFieldDefinition(line: string, indent: string): string {
   return indent + line;
 }
 
+// 文档符号提供（Go to Symbol）
+connection.onDocumentSymbol(
+  (params: DocumentSymbolParams): DocumentSymbol[] => {
+    try {
+      const document = documents.get(params.textDocument.uri);
+      if (!document) {
+        return [];
+      }
+
+      const text = document.getText();
+
+      // 性能保护：限制文档大小
+      if (text.length > 500000) {
+        console.warn("Document too large for symbol lookup:", text.length);
+        return [];
+      }
+
+      // 解析文档并收集符号
+      try {
+        const lexer = new ApiLexer(text);
+        const parser = new ApiParser(lexer);
+        const ast = parser.parse(text);
+
+        // 收集符号到临时符号表
+        const tempSymbolTable = new SymbolTable();
+        const collector = new SymbolCollector(
+          tempSymbolTable,
+          params.textDocument.uri
+        );
+        collector.collect(ast);
+
+        // 获取所有符号
+        const allSymbols = tempSymbolTable.getAllSymbols();
+
+        // 构建文档符号树
+        const documentSymbols: DocumentSymbol[] = [];
+
+        // 映射符号类型到LSP符号类型
+        const mapSymbolKind = (kind: SymbolKind): LSPSymbolKind => {
+          switch (kind) {
+            case SymbolKind.ApiList:
+              return LSPSymbolKind.Class; // apilist 作为类
+            case SymbolKind.Api:
+              return LSPSymbolKind.Method; // api 作为方法
+            case SymbolKind.Struct:
+              return LSPSymbolKind.Struct;
+            case SymbolKind.Enum:
+              return LSPSymbolKind.Enum;
+            case SymbolKind.Field:
+              return LSPSymbolKind.Field;
+            case SymbolKind.EnumValue:
+              return LSPSymbolKind.EnumMember;
+            case SymbolKind.Type:
+              return LSPSymbolKind.TypeParameter;
+            default:
+              return LSPSymbolKind.Variable;
+          }
+        };
+
+        // 首先处理 apilist（顶层符号）
+        const apiLists = allSymbols.filter(
+          (s) => s.kind === SymbolKind.ApiList
+        );
+        const apisInLists = new Set<string>(); // 跟踪已经添加到 apilist 中的 api
+
+        for (const apiList of apiLists) {
+          // 查找属于这个 apilist 的 api
+          const childApis = allSymbols.filter(
+            (s) => s.kind === SymbolKind.Api && s.parent === apiList.name
+          );
+
+          // 记录这些 api
+          childApis.forEach((api) => apisInLists.add(api.name));
+
+          // 创建 apilist 符号
+          const apiListSymbol: DocumentSymbol = {
+            name: apiList.name,
+            detail: apiList.detail || `apilist "${apiList.name}"`,
+            kind: mapSymbolKind(apiList.kind),
+            range: apiList.location.range,
+            selectionRange: apiList.location.range,
+            children: childApis.map((api) => ({
+              name: api.name,
+              detail: api.detail || `api "${api.name}"`,
+              kind: mapSymbolKind(api.kind),
+              range: api.location.range,
+              selectionRange: api.location.range,
+            })),
+          };
+
+          documentSymbols.push(apiListSymbol);
+        }
+
+        // 然后添加独立的 api（不属于任何 apilist）
+        const standaloneApis = allSymbols.filter(
+          (s) => s.kind === SymbolKind.Api && !apisInLists.has(s.name)
+        );
+
+        for (const api of standaloneApis) {
+          const apiSymbol: DocumentSymbol = {
+            name: api.name,
+            detail: api.detail || `api "${api.name}"`,
+            kind: mapSymbolKind(api.kind),
+            range: api.location.range,
+            selectionRange: api.location.range,
+          };
+          documentSymbols.push(apiSymbol);
+        }
+
+        // 添加其他顶层符号（struct, enum）
+        const otherSymbols = allSymbols.filter(
+          (s) =>
+            s.kind !== SymbolKind.ApiList &&
+            s.kind !== SymbolKind.Api &&
+            !s.parent && // 只添加顶层符号
+            s.name &&
+            s.name.trim() !== "" // 过滤掉空名称的符号（如内联枚举）
+        );
+
+        for (const symbol of otherSymbols) {
+          const docSymbol: DocumentSymbol = {
+            name: symbol.name,
+            detail: symbol.detail || symbol.name,
+            kind: mapSymbolKind(symbol.kind),
+            range: symbol.location.range,
+            selectionRange: symbol.location.range,
+          };
+          documentSymbols.push(docSymbol);
+        }
+
+        return documentSymbols;
+      } catch (parseError) {
+        console.error("Document symbol parse error:", parseError);
+        return [];
+      }
+    } catch (error) {
+      console.error("Document symbol error:", error);
+      return [];
+    }
+  }
+);
+
 // ========================================
 // 索引系统总开关 - 设置为 false 完全禁用索引
 // ========================================
-const INDEXING_ENABLED = false; // ⚠️ 设置为 true 启用索引，false 禁用
+const INDEXING_ENABLED = true; // ⚠️ 设置为 true 启用索引，false 禁用
 
 // 索引状态管理
 let isIndexing = false;
@@ -2264,9 +2460,6 @@ connection.onRequest("api/reindexAll", async () => {
               const progress = `已索引 ${indexedCount} 个已打开文档`;
               console.log(`[REINDEX] ${progress}`);
               notifyIndexingStatus("indexing", progress);
-
-              // 让出执行权，避免长时间阻塞
-              await new Promise((resolve) => setImmediate(resolve));
             }
           }
 
@@ -2350,9 +2543,6 @@ connection.onRequest("api/reindexAll", async () => {
               } else {
                 console.log(`[REINDEX] 跳过已打开文件: ${filePath}`);
               }
-
-              // 每处理一个文件就让出执行权
-              await new Promise((resolve) => setImmediate(resolve));
             }
           }
 
@@ -2367,7 +2557,6 @@ connection.onRequest("api/reindexAll", async () => {
 
           console.log("[REINDEX] 刷新补全索引");
           // 刷新补全索引
-          await new Promise((resolve) => setImmediate(resolve));
           completionIndex.refresh();
 
           // 检查是否被取消
@@ -2381,7 +2570,6 @@ connection.onRequest("api/reindexAll", async () => {
 
           console.log("[REINDEX] 保存缓存");
           // 保存到缓存
-          await new Promise((resolve) => setImmediate(resolve));
           saveCacheToFile();
 
           console.log(`[REINDEX] 索引完成，共处理 ${indexedCount} 个文档`);
@@ -2538,17 +2726,9 @@ connection.onRequest("api/absoluteRestart", async () => {
   try {
     console.log("[ABSOLUTE_RESTART] ===== 执行绝对重启 =====");
 
-    // 无条件重置所有状态
-    isIndexing = false;
-    indexingCanceled = true;
-
-    // 强制清理所有定时器
-    console.log("[ABSOLUTE_RESTART] 强制清理所有定时器");
-    clearAllTimers();
-
-    // 重置所有跟踪数组
-    processedFiles = [];
-    failedFiles = [];
+    // 强制清理所有任务和状态
+    console.log("[ABSOLUTE_RESTART] 强制清理所有定时器和异步任务");
+    forceCleanupAll();
 
     // 清空所有数据结构
     console.log("[ABSOLUTE_RESTART] 清空所有数据结构");
@@ -2560,10 +2740,8 @@ connection.onRequest("api/absoluteRestart", async () => {
     clearCache();
 
     // 清理文档设置缓存
+    console.log("[ABSOLUTE_RESTART] 清理文档设置缓存");
     documentSettings.clear();
-
-    // 重置标志（立即重置，不要等待）
-    indexingCanceled = false;
 
     if (!INDEXING_ENABLED) {
       console.log("[ABSOLUTE_RESTART] 索引系统已禁用，只清理状态，不启动索引");
@@ -2572,27 +2750,27 @@ connection.onRequest("api/absoluteRestart", async () => {
     }
 
     console.log("[ABSOLUTE_RESTART] 清理完成，准备重新索引");
-    notifyIndexingStatus("indexing", "清理完成，准备重新索引...");
+    // notifyIndexingStatus("indexing", "清理完成，准备重新索引...");
+    notifyIndexingStatus("idle", "已清理状态");
 
     // 立即在后台启动安全索引，不要阻塞请求返回
-    setImmediate(() => {
-      console.log("[ABSOLUTE_RESTART] 启动安全索引进程");
-      try {
-        safeIndexAllDocuments();
-      } catch (error) {
-        console.error("[ABSOLUTE_RESTART] 启动安全索引失败:", error);
-        notifyIndexingStatus("error", "启动索引失败");
-      }
-    });
+    // setImmediate(() => {
+    //   console.log("[ABSOLUTE_RESTART] 启动安全索引进程");
+    //   try {
+    //     safeIndexAllDocuments();
+    //   } catch (error) {
+    //     console.error("[ABSOLUTE_RESTART] 启动安全索引失败:", error);
+    //     notifyIndexingStatus("error", "启动索引失败");
+    //   }
+    // });
 
     console.log("[ABSOLUTE_RESTART] 绝对重启命令已完成，索引在后台运行");
     return "绝对重启完成，索引已在后台启动";
   } catch (error) {
     console.error("[ABSOLUTE_RESTART] 绝对重启失败:", error);
 
-    // 确保状态被重置
-    isIndexing = false;
-    indexingCanceled = false;
+    // 确保状态被完全清理
+    forceCleanupAll();
     notifyIndexingStatus("error", "绝对重启失败");
 
     throw error;

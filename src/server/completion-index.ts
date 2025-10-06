@@ -356,7 +356,16 @@ export function analyzeCompletionContext(
     .toLowerCase();
 
   // 检查是否在结构体字段类型位置
-  if (lineToPosition.match(/^\s*\w+\s+$/) && isInStruct(lines, position.line)) {
+  // 支持多种情况：
+  // 1. "fieldName " (字段名后有空格)
+  // 2. "fieldName" (字段名后没有空格，用户正在输入类型)
+  // 3. "fieldName? " (可选字段名后有空格)
+  // 4. "fieldName? TypeName" (可选字段 + 部分类型名)
+  if (
+    (lineToPosition.match(/^\s*\w+\??\s*$/) ||
+      lineToPosition.match(/^\s*\w+\??\s+\w*$/)) &&
+    isInStruct(lines, position.line)
+  ) {
     return { type: "struct-field-type", line: currentLine, position };
   }
 
