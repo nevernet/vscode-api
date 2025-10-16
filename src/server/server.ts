@@ -41,7 +41,7 @@ import {
   analyzeCompletionContext as analyzeSmartCompletionContext,
 } from "./completion-index";
 
-// 进程监控和唯一性检查
+// 进程监控（简化版，不强制杀死其他进程）
 const PROCESS_START_TIME = Date.now();
 const PROCESS_PID = process.pid;
 
@@ -49,23 +49,26 @@ console.log(
   `[PROCESS] API语言服务器启动 - PID: ${PROCESS_PID}, 启动时间: ${new Date().toISOString()}`
 );
 
-// 检查并杀死其他API语言服务器进程
-async function enforceProcessUniqueness() {
+// 保持进程唯一性以防止资源溢出，但使用优雅的方式
+let serverAlreadyRunning = false;
+
+async function checkAndManageRunningProcesses() {
   try {
     const { exec } = require("child_process");
 
-    // 使用更精确的进程查找命令
-    const searchPatterns = [
+    // 使用更精确的进程查找
+    const patterns = [
       'ps aux | grep "dist/server/server.js"',
       'ps aux | grep "api.*language.*server"',
     ];
 
-    for (const pattern of searchPatterns) {
+    let totalOtherProcesses = 0;
+
+    for (const pattern of patterns) {
       try {
         const result = await new Promise<string>((resolve, reject) => {
-          exec(pattern, { timeout: 5000 }, (error: any, stdout: string) => {
+          exec(pattern, { timeout: 3000 }, (error: any, stdout: string) => {
             if (error && error.code !== 1) {
-              // code 1 means no matches, which is ok
               reject(error);
             } else {
               resolve(stdout || "");
@@ -79,62 +82,57 @@ async function enforceProcessUniqueness() {
             (line) =>
               line.length > 0 &&
               !line.includes("grep") &&
-              !line.includes(`${PROCESS_PID}`) &&
-              (line.includes("server.js") ||
-                line.includes("api") ||
-                line.includes("language"))
+              !line.includes(`${PROCESS_PID}`)
           );
 
         if (lines.length > 0) {
-          console.log(
-            `[PROCESS] 发现 ${lines.length} 个可能的其他API语言服务器进程`
+          totalOtherProcesses += lines.length;
+          console.warn(
+            `[PROCESS_CONTROL] 发现 ${lines.length} 个其他API语言服务器进程 (模式: ${pattern}):`
           );
-
-          for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length > 1) {
-              const pid = parseInt(parts[1]);
-              if (pid && pid !== PROCESS_PID && !isNaN(pid)) {
-                console.log(`[PROCESS] 尝试杀死旧进程 PID: ${pid}`);
-                try {
-                  // 先尝试SIGTERM，给进程机会优雅退出
-                  process.kill(pid, "SIGTERM");
-
-                  // 500毫秒后使用SIGKILL强制杀死
-                  setTimeout(() => {
-                    try {
-                      process.kill(pid, 0); // 检查进程是否还存在
-                      console.log(
-                        `[PROCESS] 进程 ${pid} 未响应SIGTERM，使用SIGKILL`
-                      );
-                      process.kill(pid, "SIGKILL");
-                    } catch (e) {
-                      // 进程已经退出，这是期望的结果
-                    }
-                  }, 500);
-                } catch (e) {
-                  console.log(`[PROCESS] 进程 ${pid} 可能已经退出`);
-                }
-              }
-            }
-          }
-        } else {
-          console.log(
-            `[PROCESS] 未发现其他API语言服务器进程，当前PID: ${PROCESS_PID}`
+          lines.forEach((line) =>
+            console.warn(`[PROCESS_CONTROL] ${line.trim()}`)
           );
         }
       } catch (error) {
-        // 继续下一个搜索模式
-        console.log(`[PROCESS] 搜索模式 "${pattern}" 失败:`, error);
+        console.log(
+          `[PROCESS_CONTROL] 搜索模式 "${pattern}" 失败:`,
+          (error as any).message
+        );
       }
     }
+
+    if (totalOtherProcesses > 2) {
+      serverAlreadyRunning = true;
+      console.error(
+        `[PROCESS_CONTROL] 检测到 ${totalOtherProcesses} 个其他实例，可能导致内存溢出!`
+      );
+      console.error(`[PROCESS_CONTROL] 建议重启VS Code以清理进程`);
+
+      // 通知客户端有进程冲突
+      setTimeout(() => {
+        if (hasConfigurationCapability) {
+          connection.sendNotification("api/processConflict", {
+            warning: `检测到 ${totalOtherProcesses} 个其他API语言服务器进程，可能导致性能问题。建议重启VS Code。`,
+            processCount: totalOtherProcesses,
+          });
+        }
+      }, 3000);
+    } else if (totalOtherProcesses > 0) {
+      console.warn(
+        `[PROCESS_CONTROL] 检测到 ${totalOtherProcesses} 个其他实例，应确保只有一个LSP服务器运行`
+      );
+    }
+
+    return totalOtherProcesses;
   } catch (error) {
-    console.log(`[PROCESS] 进程唯一性检查失败:`, error);
+    console.log(`[PROCESS_CONTROL] 进程管理失败:`, (error as any).message);
+    return 0;
   }
 }
 
-// 启动时执行进程唯一性检查
-enforceProcessUniqueness();
+// 异步执行进程检查，不阻塞启动
+setTimeout(checkAndManageRunningProcesses, 1500);
 
 // 监控进程状态
 let processShutdownInitiated = false;
@@ -1721,7 +1719,7 @@ connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
   return item;
 });
 
-// 跳转到定义
+// 跳转到定义 - 支持多个定义位置
 connection.onDefinition(
   (params: TextDocumentPositionParams): Location[] | null => {
     try {
@@ -1770,11 +1768,12 @@ connection.onDefinition(
         return null;
       }
 
-      // 查找符号定义
-      const symbol = globalSymbolTable.getSymbol(word);
+      // 查找所有符号定义（支持多个位置）
+      const symbols = globalSymbolTable.getSymbolsByName(word);
 
-      if (symbol) {
-        return [symbol.location];
+      if (symbols.length > 0) {
+        // 返回所有定义位置，客户端会显示选择列表
+        return symbols.map((symbol) => symbol.location);
       }
 
       return null;
@@ -2333,7 +2332,7 @@ connection.onDocumentSymbol(
 // ========================================
 // 索引系统总开关 - 设置为 false 完全禁用索引
 // ========================================
-const INDEXING_ENABLED = true; // ⚠️ 设置为 true 启用索引，false 禁用
+const INDEXING_ENABLED = true; // ⚠️ 设置为 true 启用索引，false 禁用 - 用作基础代码提示功能
 
 // 索引状态管理
 let isIndexing = false;

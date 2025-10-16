@@ -99,6 +99,16 @@ export class SymbolTable {
     return this.symbols.get(key) || this.symbols.get(name);
   }
 
+  public getSymbolsByName(name: string): Symbol[] {
+    const symbols: Symbol[] = [];
+    for (const symbol of this.symbols.values()) {
+      if (symbol.name === name) {
+        symbols.push(symbol);
+      }
+    }
+    return symbols;
+  }
+
   public getAllSymbols(): Symbol[] {
     return Array.from(this.symbols.values());
   }
