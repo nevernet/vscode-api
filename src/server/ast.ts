@@ -28,6 +28,7 @@ export interface TypedefStatement extends Statement {
 export interface StructDefinition extends ASTNode {
   type: "StructDefinition";
   fields: FieldDefinition[];
+  extends?: TypeReference; // 可选的继承类型
 }
 
 // 字段定义

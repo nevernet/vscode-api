@@ -133,6 +133,15 @@ export class ApiParser {
   private parseStructDefinition(): StructDefinition {
     const start = this.peek();
     this.consume(TokenType.STRUCT, "Expected 'struct'");
+
+    let extendsType: TypeReference | undefined;
+
+    // 检查是否有 extend 关键字
+    if (this.check(TokenType.EXTEND)) {
+      this.advance();
+      extendsType = this.parseTypeReference();
+    }
+
     this.consume(TokenType.LEFT_BRACE, "Expected '{'");
 
     const fields: FieldDefinition[] = [];
@@ -168,6 +177,7 @@ export class ApiParser {
     return {
       type: "StructDefinition",
       fields,
+      extends: extendsType,
       start: start.start,
       end: end.end,
       line: start.line,

@@ -44,7 +44,7 @@
 		<key>buildin</key>
 		<dict>
 			<key>match</key>
-			<string>(\b(apilist|api|typedef|struct|enum|input|output|extract|extends|implements|patch)\b)|(#include\b|#set\b)</string>
+			<string>(\b(apilist|api|typedef|struct|enum|input|output|extract|extend|extends|implements|patch)\b)|(#include\b|#set\b)</string>
 			<key>name</key>
 			<string>keyword.api</string>
 		</dict>

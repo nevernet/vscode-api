@@ -1,0 +1,18 @@
+{
+  "ignore": {
+    "files": [
+      "test*.api",
+      "temp*.api"
+    ],
+    "directories": [
+      "test",
+      "samples",
+      "examples"
+    ],
+    "patterns": [
+      "*/generated/*",
+      "*/auto/*",
+      "*/backup/*"
+    ]
+  }
+}
