@@ -186,6 +186,7 @@ interface ApiLanguageServerSettings {
 
 // API项目配置接口
 interface ApiProjectConfig {
+  enabled?: boolean;
   ignore?: {
     files?: string[];
     directories?: string[];
@@ -232,6 +233,7 @@ function getCachePaths() {
 // 读取API项目配置文件
 async function loadApiProjectConfig(): Promise<ApiProjectConfig> {
   const defaultConfig: ApiProjectConfig = {
+    enabled: false,
     ignore: {
       files: [],
       directories: [],
@@ -602,6 +604,13 @@ documents.onDidOpen((event) => {
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
   try {
+    // 检查是否启用了索引功能
+    const config = await loadApiProjectConfig();
+    if (!config.enabled) {
+      console.log("[VALIDATE_DOC] 索引功能未启用，跳过文档验证");
+      return;
+    }
+
     const settings = await getDocumentSettings(textDocument.uri);
     const text = textDocument.getText();
 
@@ -910,6 +919,13 @@ function indexAllDocuments() {
   // 异步执行，避免阻塞
   setImmediate(async () => {
     try {
+      // 检查是否启用了索引功能
+      const config = await loadApiProjectConfig();
+      if (!config.enabled) {
+        console.log("[INDEX_ALL] 索引功能未启用，跳过索引");
+        return;
+      }
+
       // 设置索引状态
       isIndexing = true;
       indexingCanceled = false;
@@ -1259,6 +1275,12 @@ async function scanWorkspaceForApiFiles(
 
   // 加载配置文件
   const config = await loadApiProjectConfig();
+
+  // 检查是否启用了索引功能
+  if (!config.enabled) {
+    console.log("[SCAN] 索引功能未启用，跳过扫描");
+    return [];
+  }
 
   async function scanDirectory(
     dirPath: string,

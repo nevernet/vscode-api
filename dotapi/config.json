@@ -1,18 +1,8 @@
 {
+  "enabled": false,
   "ignore": {
-    "files": [
-      "test*.api",
-      "temp*.api"
-    ],
-    "directories": [
-      "test",
-      "samples",
-      "examples"
-    ],
-    "patterns": [
-      "*/generated/*",
-      "*/auto/*",
-      "*/backup/*"
-    ]
+    "files": ["test*.api", "temp*.api", "__debug.api"],
+    "directories": ["test", "samples", "examples"],
+    "patterns": ["*/generated/*", "*/auto/*", "*/backup/*"]
   }
 }
