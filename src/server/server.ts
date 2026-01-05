@@ -184,6 +184,15 @@ interface ApiLanguageServerSettings {
   };
 }
 
+// API项目配置接口
+interface ApiProjectConfig {
+  ignore?: {
+    files?: string[];
+    directories?: string[];
+    patterns?: string[];
+  };
+}
+
 // 创建服务器连接
 const connection = createConnection(ProposedFeatures.all);
 
@@ -218,6 +227,44 @@ function getCachePaths() {
     SYMBOL_CACHE_FILE,
     COMPLETION_CACHE_FILE,
   };
+}
+
+// 读取API项目配置文件
+async function loadApiProjectConfig(): Promise<ApiProjectConfig> {
+  const defaultConfig: ApiProjectConfig = {
+    ignore: {
+      files: [],
+      directories: [],
+      patterns: [],
+    },
+  };
+
+  if (!workspaceRoot) {
+    console.log("[CONFIG] 没有工作区根目录，使用默认配置");
+    return defaultConfig;
+  }
+
+  const configPath = path.join(workspaceRoot, ".api", "config.json");
+
+  try {
+    // 检查配置文件是否存在
+    await fs.promises.access(configPath, fs.constants.R_OK);
+
+    // 读取配置文件
+    const configContent = await fs.promises.readFile(configPath, "utf8");
+    const config = JSON.parse(configContent) as ApiProjectConfig;
+
+    console.log(`[CONFIG] 成功加载配置文件: ${configPath}`);
+    return config;
+  } catch (error) {
+    if ((error as any).code === "ENOENT") {
+      console.log(`[CONFIG] 配置文件不存在，使用默认配置: ${configPath}`);
+    } else {
+      console.error(`[CONFIG] 读取配置文件失败: ${configPath}`, error);
+    }
+
+    return defaultConfig;
+  }
 }
 
 // 默认设置
@@ -1210,6 +1257,9 @@ async function scanWorkspaceForApiFiles(
   const startTime = Date.now();
   const SCAN_TIMEOUT = 30000; // 30秒扫描超时
 
+  // 加载配置文件
+  const config = await loadApiProjectConfig();
+
   async function scanDirectory(
     dirPath: string,
     currentDepth: number
@@ -1256,8 +1306,8 @@ async function scanWorkspaceForApiFiles(
         const fullPath = path.join(dirPath, entry.name);
 
         if (entry.isDirectory()) {
-          // 跳过常见的忽略目录
-          if (shouldSkipDirectory(entry.name)) {
+          // 检查是否应该跳过此目录
+          if (await shouldSkipDirectory(entry.name, fullPath, config)) {
             continue;
           }
 
@@ -1267,6 +1317,11 @@ async function scanWorkspaceForApiFiles(
           entry.name.endsWith(".api") &&
           entry.name !== "__debug.api"
         ) {
+          // 检查是否应该跳过此文件
+          if (await shouldSkipFile(fullPath, config)) {
+            continue;
+          }
+
           // 在添加到列表前，验证文件确实存在且可读
           try {
             await fs.promises.access(fullPath, fs.constants.R_OK);
@@ -1307,8 +1362,13 @@ async function scanWorkspaceForApiFiles(
 }
 
 // 判断是否应该跳过某个目录
-function shouldSkipDirectory(dirName: string): boolean {
-  const skipDirs = [
+async function shouldSkipDirectory(
+  dirName: string,
+  dirPath: string,
+  config: ApiProjectConfig
+): Promise<boolean> {
+  // 默认要跳过的目录
+  const defaultSkipDirs = [
     "node_modules",
     ".git",
     ".vscode",
@@ -1324,7 +1384,87 @@ function shouldSkipDirectory(dirName: string): boolean {
     ".api", // 跳过我们自己的缓存目录
   ];
 
-  return skipDirs.includes(dirName) || dirName.startsWith(".");
+  // 检查默认跳过目录
+  if (defaultSkipDirs.includes(dirName) || dirName.startsWith(".")) {
+    return true;
+  }
+
+  // 检查配置文件中指定的要忽略的目录
+  if (config.ignore?.directories) {
+    for (const ignoreDir of config.ignore.directories) {
+      // 支持简单的通配符匹配
+      if (ignoreDir.includes("*")) {
+        const regex = new RegExp(ignoreDir.replace(/\*/g, ".*"));
+        if (regex.test(dirName)) {
+          console.log(
+            `[SCAN] 根据配置跳过目录: ${dirName} (匹配模式: ${ignoreDir})`
+          );
+          return true;
+        }
+      } else if (dirName === ignoreDir) {
+        console.log(`[SCAN] 根据配置跳过目录: ${dirName}`);
+        return true;
+      }
+    }
+  }
+
+  // 检查配置文件中指定的要忽略的模式
+  if (config.ignore?.patterns) {
+    for (const pattern of config.ignore.patterns) {
+      // 支持路径匹配
+      const regex = new RegExp(pattern.replace(/\*/g, ".*"));
+      if (regex.test(dirPath)) {
+        console.log(
+          `[SCAN] 根据配置跳过目录路径: ${dirPath} (匹配模式: ${pattern})`
+        );
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// 判断是否应该跳过某个文件
+async function shouldSkipFile(
+  filePath: string,
+  config: ApiProjectConfig
+): Promise<boolean> {
+  // 检查配置文件中指定的要忽略的文件
+  if (config.ignore?.files) {
+    const fileName = path.basename(filePath);
+    for (const ignoreFile of config.ignore.files) {
+      // 支持简单的通配符匹配
+      if (ignoreFile.includes("*")) {
+        const regex = new RegExp(ignoreFile.replace(/\*/g, ".*"));
+        if (regex.test(fileName)) {
+          console.log(
+            `[SCAN] 根据配置跳过文件: ${fileName} (匹配模式: ${ignoreFile})`
+          );
+          return true;
+        }
+      } else if (fileName === ignoreFile) {
+        console.log(`[SCAN] 根据配置跳过文件: ${fileName}`);
+        return true;
+      }
+    }
+  }
+
+  // 检查配置文件中指定的要忽略的模式
+  if (config.ignore?.patterns) {
+    for (const pattern of config.ignore.patterns) {
+      // 支持路径匹配
+      const regex = new RegExp(pattern.replace(/\*/g, ".*"));
+      if (regex.test(filePath)) {
+        console.log(
+          `[SCAN] 根据配置跳过文件路径: ${filePath} (匹配模式: ${pattern})`
+        );
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 // 索引工作区中的单个文件

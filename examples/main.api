@@ -1,0 +1,23 @@
+// 这是一个示例API文件，用于展示忽略功能
+
+typedef struct User {
+  id: int;
+  name: string;
+  email: string;
+}
+
+typedef struct Product {
+  id: int;
+  name: string;
+  price: float;
+}
+
+api "GetUser" {
+  input: User;
+  output: User;
+}
+
+api "GetProduct" {
+  input: Product;
+  output: Product;
+}

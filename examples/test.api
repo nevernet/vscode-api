@@ -1,0 +1,10 @@
+// 这是一个测试文件，应该被配置中的忽略规则跳过
+
+typedef struct TestStruct {
+  value: int;
+}
+
+api "TestApi" {
+  input: TestStruct;
+  output: TestStruct;
+}
